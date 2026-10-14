@@ -1,0 +1,7 @@
+{
+  "name": "inscricao-eventos",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": { "test": "node tests/browser.cjs" },
+  "devDependencies": { "playwright": "^1.58.0" }
+}

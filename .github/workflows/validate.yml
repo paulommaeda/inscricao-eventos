@@ -1,0 +1,31 @@
+name: Validate plugin
+on: [push, pull_request]
+jobs:
+  financial:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        php: ['8.1', '8.3']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: openssl
+      - run: find . -name '*.php' -not -path './node_modules/*' -print0 | xargs -0 -n1 php -l
+      - run: php tests/financial.php
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
+      - run: python3 scripts/build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inscricao-eventos-plugin
+          path: dist/*.zip
