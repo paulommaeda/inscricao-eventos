@@ -101,7 +101,7 @@ final class Payments
         try {
             $p = Store::payment($paymentId); $r = Store::registration((int) $p['registration_id']); $api = new Gateway();
             if (!hash_equals($p['scope'], $api->scope())) { throw new \RuntimeException('Pagamento pertence a outra conta ou ambiente K8.'); }
-            if ($remoteId !== null && !preg_match('/^[A-Za-z0-9-]{1,100}$/D', $remoteId)) { throw new \RuntimeException('Identificador de transação inválido.'); }
+            if ($remoteId !== null) { $remoteId = Domain::remoteId($remoteId); }
             if ($remoteId) {
                 // Only a retry hint: no transaction or credit is inserted until the API confirms the match.
                 Store::update('payments', ['remote_id_hint' => $remoteId], ['id' => $paymentId]);
@@ -111,7 +111,7 @@ final class Payments
                 if ($rows === null || !empty($wpdb->last_error)) { throw new \RuntimeException('Não foi possível conferir as transações já vinculadas.'); }
                 $ids = array_column($rows, 'remote_id');
                 if (!empty($p['remote_id_hint'])) { $ids[] = $p['remote_id_hint']; }
-                $ids = array_values(array_unique($ids));
+                $ids = array_values(array_unique(array_map([Domain::class, 'remoteId'], $ids)));
             }
             if ($ids) {
                 foreach ($ids as $candidate) {
@@ -119,8 +119,20 @@ final class Payments
                     self::applyVerified($p, $r, $data, $candidate);
                 }
             } else {
-                $data = $api->request('/api/ConsultaTransacaoReferencia', ['Referencia' => $p['reference']]);
-                self::applyVerified($p, $r, $data);
+                try {
+                    $data = $api->request('/api/ConsultaTransacaoReferencia', ['Referencia' => $p['reference']]);
+                    self::applyVerified($p, $r, $data);
+                } catch (ReferenceNotFound $e) {
+                    // Some checkouts do not expose their reference through the transaction lookup.
+                    // Discover only exact order/reference/checkout matches, then re-query each ID.
+                    $ids = self::discover($api, $p);
+                    if (!$ids) { throw new \RuntimeException('O K8 ainda não devolveu uma transação vinculada a esta tentativa. Aguarde a confirmação ou informe o ID completo da transação no painel, sem gerar outra cobrança.'); }
+                    foreach ($ids as $candidate) {
+                        Store::update('payments', ['remote_id_hint' => $candidate], ['id' => $paymentId]);
+                        $data = $api->request('/api/ConsultaTransacao', ['Identificador' => $candidate]);
+                        self::applyVerified($p, $r, $data, $candidate);
+                    }
+                }
             }
         } catch (\Throwable $e) {
             Store::update('payments', ['synced_at' => current_time('mysql', true), 'last_error' => Domain::cut($e->getMessage(), 500)], ['id' => $paymentId]);
@@ -128,18 +140,60 @@ final class Payments
         } finally { Store::unlock($lock); }
     }
 
+    private static function checkoutMatches(array $p, $checkout): bool
+    {
+        if (!is_string($checkout) || $checkout === '' || empty($p['checkout_id'])) { return false; }
+        try { return Domain::remoteId($checkout) === Domain::remoteId($p['checkout_id']); }
+        catch (\Throwable $e) { return false; }
+    }
+
+    /** This API result only supplies candidate IDs. Credit always requires a separate ID query. */
+    private static function discover(Gateway $api, array $p): array
+    {
+        $created = \DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', (string) ($p['created_at'] ?? ''), new \DateTimeZone('UTC'));
+        if (!$created) { throw new \RuntimeException('Data da tentativa inválida para consultar o K8. Informe o ID completo da transação.'); }
+        $data = $api->request('/api/ConsultaTransacoes', ['DataHoraInicial' => $created->modify('-5 minutes')->format(DATE_ATOM), 'DataHoraFinal' => gmdate(DATE_ATOM, time() + 60), 'Tipo' => $p['method'], 'Estado' => 'Todos', 'TipoFiltro' => 'dataemissao']);
+        if (!isset($data['Transacoes']) || !is_array($data['Transacoes'])) { throw new \RuntimeException('Lista de transações K8 inválida. Informe o ID completo da transação para consultar.'); }
+        $ids = [];
+        foreach ($data['Transacoes'] as $row) {
+            if (!is_array($row)) { throw new \RuntimeException('Lista de transações K8 inválida.'); }
+            if (($row['Referencia'] ?? '') !== $p['reference'] && ($row['NumeroPedido'] ?? '') !== $p['reference'] && !self::checkoutMatches($p, $row['IdentificadorCheckout'] ?? $row['CheckoutId'] ?? '')) { continue; }
+            if (!is_string($row['Identificador'] ?? null) && !is_int($row['Identificador'] ?? null)) { throw new \RuntimeException('Identificador inválido na lista de transações K8.'); }
+            $ids[] = Domain::remoteId((string) ($row['Identificador'] ?? ''));
+        }
+        return array_values(array_unique($ids));
+    }
+
     /** Caller holds the registration lock. Callback payloads never call this directly. */
     public static function applyVerified(array $p, array $r, array $data, ?string $expectedId = null): void
     {
         global $wpdb;
-        $id = (string) ($data['Identificador'] ?? '');
+        foreach (['Identificador', 'Referencia', 'NumeroPedido', 'IdentificadorCheckout', 'CheckoutId', 'ClienteCPFCNPJ'] as $field) {
+            if (isset($data[$field]) && !is_string($data[$field]) && !is_int($data[$field])) { throw new \RuntimeException('Campo ' . $field . ' inválido na resposta K8.'); }
+        }
+        $id = Domain::remoteId((string) ($data['Identificador'] ?? ''));
+        if ($expectedId !== null) { $expectedId = Domain::remoteId($expectedId); }
         $reference = (string) ($data['Referencia'] ?? ''); $order = (string) ($data['NumeroPedido'] ?? '');
         $checkout = (string) ($data['IdentificadorCheckout'] ?? $data['CheckoutId'] ?? '');
-        $matches = $reference === $p['reference'] || $order === $p['reference'] || ($checkout !== '' && !empty($p['checkout_id']) && $checkout === $p['checkout_id']);
-        $conflicts = ($reference !== '' && $reference !== $p['reference']) || ($order !== '' && $order !== $p['reference']) || ($checkout !== '' && !empty($p['checkout_id']) && $checkout !== $p['checkout_id']);
-        if (!preg_match('/^[A-Za-z0-9-]{1,100}$/D', $id) || ($expectedId && $id !== $expectedId) || !$matches || $conflicts || preg_replace('/\D/', '', (string) ($data['ClienteCPFCNPJ'] ?? '')) !== Security::unseal($r['cpf_encrypted'])) { throw new \RuntimeException('A identidade da transação K8 não confere com a inscrição (ID, pedido/referência ou CPF).'); }
+        $matches = $reference === $p['reference'] || $order === $p['reference'] || self::checkoutMatches($p, $checkout);
+        $problems = [];
+        if ($expectedId && $id !== $expectedId) { $problems[] = 'ID retornado diferente do ID consultado'; }
+        if (!$matches) { $problems[] = 'nenhum pedido, referência ou checkout corresponde à tentativa'; }
+        if ($reference !== '' && $reference !== $p['reference']) { $problems[] = 'referência diferente'; }
+        if ($order !== '' && $order !== $p['reference']) { $problems[] = 'número do pedido diferente'; }
+        if ($checkout !== '' && !empty($p['checkout_id']) && !self::checkoutMatches($p, $checkout)) { $problems[] = 'checkout diferente'; }
+        if (preg_replace('/\D/', '', (string) ($data['ClienteCPFCNPJ'] ?? '')) !== Security::unseal($r['cpf_encrypted'])) { $problems[] = 'CPF diferente ou ausente'; }
+        if ($problems) { throw new \RuntimeException('A transação K8 não corresponde à inscrição: ' . implode('; ', $problems) . '.'); }
         $table = Store::table('transactions');
         $existing = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE scope=%s AND remote_id=%s", $p['scope'], $id), ARRAY_A);
+        if (!empty($wpdb->last_error)) { throw new \RuntimeException('Não foi possível conferir o histórico da transação.'); }
+        if (preg_match('/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/D', $id)) {
+            $aliases = $wpdb->get_results($wpdb->prepare("SELECT * FROM $table WHERE scope=%s AND REPLACE(LOWER(remote_id),'-','')=%s", $p['scope'], str_replace('-', '', $id)), ARRAY_A);
+            if ($aliases === null || !empty($wpdb->last_error)) { throw new \RuntimeException('Não foi possível conferir o histórico da transação.'); }
+            $aliases = array_values(array_filter($aliases, static fn($row) => Domain::remoteId($row['remote_id']) === $id));
+            if (count($aliases) > 1) { throw new \RuntimeException('Há dois registros com formatos diferentes do mesmo ID K8. Procure a organização para conferir o histórico.'); }
+            $existing = $aliases[0] ?? $existing;
+        }
         if ($existing && (int) $existing['payment_id'] !== (int) $p['id']) { throw new \RuntimeException('Transação K8 já vinculada a outro pagamento.'); }
         $credit = Domain::credit($data, (int) $p['amount'], $p['method'], (int) ($existing['credit'] ?? 0));
         $row = ['payment_id' => $p['id'], 'scope' => $p['scope'], 'remote_id' => $id, 'remote_state' => $data['Estado'], 'credit' => $credit, 'paid_at' => Domain::cut((string) ($data['DataPagamento'] ?? ''), 40), 'synced_at' => current_time('mysql', true)];
@@ -150,7 +204,7 @@ final class Payments
             if ($sum === null || !empty($wpdb->last_error)) { throw new \RuntimeException('Falha ao conferir o crédito financeiro. A conciliação será repetida.'); }
             $sum = (int) $sum;
             $state = $sum > 0 ? 'paid' : (Domain::terminal($data['Estado']) ? 'closed' : 'pending');
-            Store::update('payments', ['state' => $state, 'synced_at' => current_time('mysql', true), 'last_error' => ''], ['id' => $p['id']]);
+            Store::update('payments', ['state' => $state, 'synced_at' => current_time('mysql', true), 'last_error' => '', 'webhook_error' => ''], ['id' => $p['id']]);
             Store::commit();
         } catch (\Throwable $e) { Store::rollback(); throw $e; }
     }

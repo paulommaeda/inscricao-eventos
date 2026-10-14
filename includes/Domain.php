@@ -17,6 +17,18 @@ final class Domain
 
     public static function money(int $cents): string { return 'R$ ' . number_format($cents / 100, 2, ',', '.'); }
 
+    /** K8 can send the same GUID as 32 hex characters or with hyphens and different casing. */
+    public static function remoteId(string $id): string
+    {
+        $id = trim($id);
+        if (!preg_match('/^[A-Za-z0-9-]{1,100}$/D', $id)) { throw new \RuntimeException('Identificador de transação K8 inválido ou ausente.'); }
+        if (preg_match('/^(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/iD', $id)) {
+            $hex = strtolower(str_replace('-', '', $id));
+            return substr($hex, 0, 8) . '-' . substr($hex, 8, 4) . '-' . substr($hex, 12, 4) . '-' . substr($hex, 16, 4) . '-' . substr($hex, 20);
+        }
+        return $id; // Preserve opaque, non-GUID identifiers exactly.
+    }
+
     public static function cpf(string $input): string
     {
         $cpf = preg_replace('/\D/', '', $input);
@@ -57,7 +69,8 @@ final class Domain
     /** Only authenticated gateway responses reach this function. Non-final states preserve an existing credit. */
     public static function credit(array $remote, int $amount, string $method, int $previous): int
     {
-        if (self::cents($remote['Valor'] ?? '') !== $amount || ($remote['Tipo'] ?? '') !== $method) { throw new \RuntimeException('Valor ou forma de pagamento K8 diferente da cobrança local.'); }
+        if (self::cents($remote['Valor'] ?? '') !== $amount) { throw new \RuntimeException('O valor da transação K8 difere do valor desta tentativa.'); }
+        if (($remote['Tipo'] ?? '') !== $method) { throw new \RuntimeException('A forma de pagamento K8 difere da forma desta tentativa.'); }
         $state = $remote['Estado'] ?? '';
         if (in_array($state, ['Aprovada', 'Liquidado'], true)) {
             if ($method === 'Cartao') { return $amount; } // Bank installments are owed to the card issuer, not to the event.

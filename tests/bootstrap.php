@@ -2,7 +2,7 @@
 /** Isolated WordPress / gateway doubles. No real payments or emails are sent. */
 define('ABSPATH', __DIR__ . '/');
 define('ARRAY_A', 'ARRAY_A');
-define('IE_VERSION', '1.0.2');
+define('IE_VERSION', '1.0.3');
 define('DAY_IN_SECONDS', 86400); define('HOUR_IN_SECONDS', 3600);
 $GLOBALS['test_options'] = []; $GLOBALS['test_transients'] = []; $GLOBALS['http_queue'] = []; $GLOBALS['http_calls'] = [];
 function wp_salt($scheme) { return 'local-test-salt-never-a-production-secret'; }
@@ -74,7 +74,7 @@ final class TestDB
         if ($table === 'wp_ie_registrations') foreach ($this->rows[$table] ?? [] as $r) if ($r['event_id'] === $data['event_id'] && $r['scope'] === $data['scope'] && $r['cpf_hash'] === $data['cpf_hash']) return false;
         $id = ($this->seq[$table] ?? 0) + 1; $this->seq[$table] = $id; $this->insert_id = $id;
         $data = array_merge(['id' => $id], $data);
-        if ($table === 'wp_ie_payments') $data = array_merge(['checkout_id' => null, 'synced_at' => null, 'remote_id_hint' => '', 'webhook_at' => null, 'webhook_error' => ''], $data);
+        if ($table === 'wp_ie_payments') $data = array_merge(['checkout_id' => null, 'synced_at' => null, 'created_at' => current_time('mysql', true), 'remote_id_hint' => '', 'webhook_at' => null, 'webhook_error' => ''], $data);
         $this->rows[$table][$id] = $data; return 1;
     }
     public function update($table, $data, $where) {
@@ -103,6 +103,7 @@ final class TestDB
     public function get_results($sql, $output = null) {
         if (!preg_match_all('/FROM (wp_ie_\w+)/', $sql, $m)) throw new RuntimeException('Unexpected SQL: ' . $sql);
         $table = end($m[1]); $where = $this->where($sql); $rows = array_values(array_filter($this->rows[$table] ?? [], fn($r) => $this->matches($r, $where)));
+        if (preg_match("/REPLACE\(LOWER\(remote_id\),'-',''\)='([^']+)'/", $sql, $guid)) { $rows = array_values(array_filter($rows, static fn($r) => str_replace('-', '', strtolower($r['remote_id'])) === $guid[1])); }
         if ($table === 'wp_ie_payments') {
             usort($rows, static fn($a, $b) => $b['id'] <=> $a['id']);
             foreach ($rows as &$p) { $p['credit'] = 0; foreach ($this->rows['wp_ie_transactions'] ?? [] as $t) if ($t['payment_id'] == $p['id']) $p['credit'] += $t['credit']; } unset($p);

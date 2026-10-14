@@ -2,6 +2,8 @@
 namespace InscricaoEventos;
 if (!defined('ABSPATH')) { exit; }
 
+final class ReferenceNotFound extends \RuntimeException {}
+
 final class Gateway
 {
     private array $credentials;
@@ -87,7 +89,7 @@ final class Gateway
     }
     public function request(string $path, array $body): array
     {
-        $allowed = ['/v2/CriaTransacaoCheckout', '/api/ConsultaTransacao', '/api/ConsultaTransacaoReferencia'];
+        $allowed = ['/v2/CriaTransacaoCheckout', '/api/ConsultaTransacao', '/api/ConsultaTransacaoReferencia', '/api/ConsultaTransacoes'];
         if (!in_array($path, $allowed, true)) { throw new \RuntimeException('Operação K8 não permitida.'); }
         for ($attempt = 0; $attempt < 2; $attempt++) {
             $r = $this->transport($path, ['method' => 'POST', 'headers' => ['Accept' => 'application/json', 'Content-Type' => 'application/json', 'Authorization' => 'Bearer ' . $this->authenticate(), 'Aeskey' => $this->credentials['aes']], 'body' => self::encode($body, $this->credentials['aes'])]);
@@ -100,7 +102,9 @@ final class Gateway
                 foreach ($this->credentials as $secret) { if ($secret !== '') { $detail = str_replace([$secret, urlencode($secret), rawurlencode($secret)], '[oculto]', $detail); } }
                 $detail = preg_replace('/\b(Bearer|access_token|client_secret|password|aeskey)\s*[:=]?\s*["\']?[^\s,"\';]+/i', '$1 [oculto]', $detail);
                 $detail = preg_replace('/\b\d{11,14}\b/', '[documento oculto]', $detail);
-                throw new \RuntimeException('K8 não confirmou esta operação.' . ($detail ? ' Retorno K8: ' . Domain::cut(sanitize_text_field($detail), 300) . '.' : '') . ' Confira a tentativa no painel K8.');
+                $message = 'K8 não confirmou esta operação.' . ($detail ? ' Retorno K8: ' . Domain::cut(sanitize_text_field($detail), 300) . '.' : '') . ' Confira a tentativa no painel K8.';
+                if ($path === '/api/ConsultaTransacaoReferencia' && preg_match('/refer[eê]ncia\b.*n[aã]o\s+localizad[ao]/iu', $detail)) { throw new ReferenceNotFound($message); }
+                throw new \RuntimeException($message);
             }
             return $data;
         }

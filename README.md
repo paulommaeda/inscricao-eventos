@@ -57,6 +57,12 @@ Desde a versão 1.0.2, o retorno lê `ID_BknBank` na URL, inclusive em POST sem 
 
 O ID recebido é uma pista para consultar a API, sem criar crédito diretamente. Ele fica guardado mesmo se a consulta falhar, para nova conciliação pelo cron, pela consulta do participante ou pelo administrador. Transações já conferidas também são consultadas por seu ID, permitindo acompanhar estornos. O detalhe administrativo mostra a data do último retorno e eventuais erros. As colunas adicionais são criadas automaticamente na primeira carga da versão atualizada, antes de atender um webhook.
 
+A versão 1.0.3 normaliza GUIDs K8 de 32 caracteres ou com hífens, incluindo diferenças de maiúsculas/minúsculas, tanto para a transação quanto para o checkout. O ID financeiro é guardado em formato canônico. Registros antigos em outro formato do mesmo GUID são reutilizados e normalizados na transação de banco. Se houver dois registros históricos do mesmo GUID em formatos diferentes, a conciliação é interrompida para conferência, sem apagar registros ou inventar uma correção de saldo.
+
+Se a consulta por referência devolver especificamente **referência da transação não localizada**, o plugin consulta `/api/ConsultaTransacoes` no período desde a criação da tentativa. Seleciona apenas correspondências exatas de pedido, referência ou checkout e consulta cada ID novamente em `/api/ConsultaTransacao`. A lista nunca confirma crédito diretamente, e CPF/valor/método seguem obrigatórios. CPF e valor iguais, sozinhos, não identificam um pagamento. Se a API não devolver uma correspondência ou o resultado estiver indisponível/incompleto, a tentativa continua pendente ou em conferência, e o administrador pode informar o ID completo da transação. Essa consulta não cria checkout nem libera outra cobrança.
+
+As mensagens indicam qual campo falhou: ID, pedido, referência, checkout, CPF, valor ou método. O CPF completo e a resposta bruta da API não são incluídos no diagnóstico. Uma conciliação bem-sucedida também limpa o erro antigo do retorno para que o painel não continue mostrando uma falha já resolvida.
+
 O histórico usa identificadores únicos de transação e operações com bloqueio/transação de banco. Repetições de callback não duplicam crédito. Estornos confirmados restauram o saldo. Excedentes são registrados e mostrados para conferência, sem descartar pagamentos.
 
 WP-Cron consulta as tentativas a cada cinco minutos, em grupos limitados. A consulta por CPF, o retorno e o botão “Atualizar saldo” também solicitam conciliação. Em sites com pouco tráfego, programe `wp-cron.php` no cron do servidor. O K8 pode confirmar alguns instantes depois do retorno ao site.
@@ -89,11 +95,11 @@ npm test
 python3 scripts/build.py
 ```
 
-Os testes financeiros usam dublês de WordPress/banco/K8 para verificar valores, CPF, limites de lotes, aprovação, estorno, duplicidade, rollback, proteção de origem e separação de ambientes. Os testes de webhook cobrem POST/GET, `ID_BknBank`, JSON/formulário, colisão de parâmetros, tokens, falhas temporárias, correlação e repetição sem duplicar crédito. Os testes de navegador simulam a API localmente para verificar desktop/celular, cadastro, CPF, pagamentos, retorno, pendências e erros.
+Os testes financeiros usam dublês de WordPress/banco/K8 para verificar valores, CPF, limites de lotes, aprovação, estorno, duplicidade, rollback, proteção de origem e separação de ambientes. Os testes de webhook cobrem POST/GET, `ID_BknBank`, JSON/formulário, colisão de parâmetros, tokens, falhas temporárias, correlação e repetição sem duplicar crédito. Incluem GUIDs equivalentes, registros financeiros antigos, divergências por campo, busca exata de pedido após referência não localizada e rejeição de resultados não relacionados. Os testes de navegador simulam a API localmente para verificar desktop/celular, cadastro, CPF, pagamentos, retorno, pendências e erros.
 
 Nenhum teste automatizado cria cobrança real. A versão inicial foi validada localmente com respostas simuladas; instalação no seu WordPress, autorização das credenciais, opções efetivas de parcelamento e callback real precisam de homologação na conta K8.
 
-Contrato utilizado: [checkout hospedado K8](https://docs.meuk8.com.br/reference/criatransacaocheckout_criatransacaocheckout_criatransacaocheckout_post), [consulta por referência](https://docs.meuk8.com.br/reference/consultatransacao_consultatransacaoreferencia_consultatransacaoreferencia_post), [callbacks](https://docs.meuk8.com.br/docs/payload-callback) e Swagger oficial `/PagamentosAPI/swagger/docs/v1`, consultado nesta implementação.
+Contrato utilizado: [checkout hospedado K8](https://docs.meuk8.com.br/reference/criatransacaocheckout_criatransacaocheckout_criatransacaocheckout_post), [consulta por referência](https://docs.meuk8.com.br/reference/consultatransacao_consultatransacaoreferencia_consultatransacaoreferencia_post), [consulta de transações por período](https://docs.meuk8.com.br/reference/consultatransacoes_consultatransacoes_consultatransacoes_post), [callbacks](https://docs.meuk8.com.br/docs/payload-callback) e Swagger oficial `/PagamentosAPI/swagger/docs/v1`, consultado nesta implementação.
 
 ## Autenticação recusada / HTTP 400
 
