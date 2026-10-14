@@ -2,7 +2,7 @@
 /** Isolated WordPress / gateway doubles. No real payments or emails are sent. */
 define('ABSPATH', __DIR__ . '/');
 define('ARRAY_A', 'ARRAY_A');
-define('IE_VERSION', '1.1.0');
+define('IE_VERSION', '1.2.0');
 define('DAY_IN_SECONDS', 86400); define('HOUR_IN_SECONDS', 3600);
 $GLOBALS['test_options'] = []; $GLOBALS['test_transients'] = []; $GLOBALS['http_queue'] = []; $GLOBALS['http_calls'] = [];
 function wp_salt($scheme) { return 'local-test-salt-never-a-production-secret'; }
@@ -24,7 +24,7 @@ function is_email($value) { return filter_var($value, FILTER_VALIDATE_EMAIL); }
 function is_ssl() { return true; }
 function home_url($path = '') { return 'https://event.test' . $path; }
 function rest_url($path = '') { return 'https://event.test/wp-json/' . $path; }
-function get_permalink($id) { return 'https://event.test/inscricoes'; }
+function get_permalink($id = 0) { return 'https://event.test/inscricoes'; }
 function get_current_user_id() { return 1; }
 function wp_parse_url($url, $component = -1) { return parse_url($url, $component); }
 function add_query_arg($key, $value = null, $url = null) {
@@ -65,6 +65,10 @@ final class TestDB
     public array $rows = []; private array $seq = []; private ?array $snapshot = null;
     public bool $failLock = false; public ?string $failUpdate = null; public ?string $failUpdateField = null;
     public bool $failSum = false;
+    public ?string $failDelete = null;
+    public bool $failReport = false;
+    public string $last_error = '';
+    public function esc_like($value) { return addcslashes((string) $value, '_%\\'); }
     public function prepare($sql, ...$values) {
         if (isset($values[0]) && is_array($values[0])) $values = $values[0];
         return preg_replace_callback('/%[ds]/', static function ($m) use (&$values) { $v = array_shift($values); return $m[0] === '%d' ? (string) (int) $v : "'" . str_replace("'", "''", (string) $v) . "'"; }, $sql);
@@ -84,7 +88,7 @@ final class TestDB
         $n = 0; foreach ($this->rows[$table] ?? [] as $id => $r) if ($this->matches($r, $where)) { $this->rows[$table][$id] = array_merge($r, $data); $n++; } return $n;
     }
     public function hydrate(array $rows): void { $this->rows = $rows; $this->seq = []; foreach ($rows as $table => $items) { $this->seq[$table] = $items ? max(array_keys($items)) : 0; } }
-    public function delete($table, $where) { $n = 0; foreach ($this->rows[$table] ?? [] as $id => $r) if ($this->matches($r, $where)) { unset($this->rows[$table][$id]); $n++; } return $n; }
+    public function delete($table, $where) { if ($this->failDelete === $table) { $this->failDelete = null; return false; } $n = 0; foreach ($this->rows[$table] ?? [] as $id => $r) if ($this->matches($r, $where)) { unset($this->rows[$table][$id]); $n++; } return $n; }
     private function matches($row, $where) { foreach ($where as $key => $value) if ((string) ($row[$key] ?? '') !== (string) $value) return false; return true; }
     private function where($sql) {
         $w = []; foreach (['id', 'event_id', 'registration_id', 'payment_id', 'scope', 'cpf_hash', 'remote_id', 'token_hash', 'bucket'] as $field) {
@@ -104,6 +108,16 @@ final class TestDB
     }
     public function get_row($sql, $output = null) { return $this->get_results($sql, $output)[0] ?? null; }
     public function get_results($sql, $output = null) {
+        if (str_contains($sql, '/* ie-report */')) {
+            if ($this->failReport) { $this->failReport = false; return null; }
+            // Execute the production SELECT against a real SQL engine, rather than mimic reports in PHP.
+            $process = proc_open(['python3', __DIR__ . '/report-sql.py'], [['pipe', 'r'], ['pipe', 'w'], ['pipe', 'w']], $pipes);
+            if (!is_resource($process)) throw new RuntimeException('Cannot start report SQL fixture');
+            fwrite($pipes[0], json_encode(['sql' => $sql, 'rows' => $this->rows])); fclose($pipes[0]);
+            $output = stream_get_contents($pipes[1]); fclose($pipes[1]); $error = stream_get_contents($pipes[2]); fclose($pipes[2]);
+            if (proc_close($process) !== 0) throw new RuntimeException('Report SQL failed: ' . $error);
+            return json_decode($output, true, 512, JSON_THROW_ON_ERROR);
+        }
         if (!preg_match_all('/FROM (wp_ie_\w+)/', $sql, $m)) throw new RuntimeException('Unexpected SQL: ' . $sql);
         $table = end($m[1]); $where = $this->where($sql); $rows = array_values(array_filter($this->rows[$table] ?? [], fn($r) => $this->matches($r, $where)));
         if (preg_match("/REPLACE\(LOWER\(remote_id\),'-',''\)='([^']+)'/", $sql, $guid)) { $rows = array_values(array_filter($rows, static fn($r) => str_replace('-', '', strtolower($r['remote_id'])) === $guid[1])); }

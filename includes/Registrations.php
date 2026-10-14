@@ -61,18 +61,42 @@ final class Registrations
     }
     public static function purge(int $id): void
     {
-        global $wpdb; $lock = Store::lock('registration:' . $id);
+        $r = Store::registration($id); $eventLock = Store::lock('event:' . $r['event_id']); $lock = null;
         try {
-            $r = Store::registration($id);
-            if (($r['status'] ?? 'active') !== 'deleted') { throw new \RuntimeException('Mova a inscrição para a lixeira antes de excluir definitivamente.'); }
-            if (Store::payments($id)) { throw new \RuntimeException('Inscrições com tentativas K8 conservam o histórico financeiro na lixeira.'); }
+            $lock = Store::lock('registration:' . $id); Store::registration($id);
+            Store::begin();
+            try { self::erase($id); Store::commit(); }
+            catch (\Throwable $e) { Store::rollback(); throw $e; }
+        } finally { if ($lock) { Store::unlock($lock); } Store::unlock($eventLock); }
+    }
+    /** Remove a complete event locally. This never calls the K8 cancellation/refund API. */
+    public static function purgeEvent(int $id): void
+    {
+        global $wpdb; $eventLock = Store::lock('event:' . $id); $locks = [];
+        try {
+            Store::event($id);
+            $rows = $wpdb->get_results($wpdb->prepare('SELECT id FROM ' . Store::table('registrations') . ' WHERE event_id=%d ORDER BY id', $id), ARRAY_A);
+            if ($rows === null || !empty($wpdb->last_error)) { throw new \RuntimeException('Não foi possível conferir as inscrições do evento.'); }
+            // Same event -> registration lock order as registration edits; serialize callbacks and cron.
+            foreach ($rows as $r) { $locks[] = Store::lock('registration:' . $r['id']); }
             Store::begin();
             try {
-                Store::audit($id, 'purge', 'Cadastro sem tentativas de pagamento excluído definitivamente.');
-                Store::check($wpdb->delete(Store::table('sessions'), ['registration_id' => $id]));
-                Store::check($wpdb->delete(Store::table('registrations'), ['id' => $id]));
+                foreach ($rows as $r) { self::erase((int) $r['id']); }
+                Store::check($wpdb->delete(Store::table('lots'), ['event_id' => $id]));
+                Store::check($wpdb->delete(Store::table('events'), ['id' => $id]));
                 Store::commit();
             } catch (\Throwable $e) { Store::rollback(); throw $e; }
-        } finally { Store::unlock($lock); }
+        } finally {
+            foreach (array_reverse($locks) as $lock) { Store::unlock($lock); }
+            Store::unlock($eventLock);
+        }
+    }
+    /** Caller holds the event/registration locks and the enclosing database transaction. */
+    private static function erase(int $id): void
+    {
+        global $wpdb;
+        foreach (Store::payments($id) as $p) { Store::check($wpdb->delete(Store::table('transactions'), ['payment_id' => $p['id']])); }
+        foreach (['payments', 'sessions', 'audit'] as $table) { Store::check($wpdb->delete(Store::table($table), ['registration_id' => $id])); }
+        Store::check($wpdb->delete(Store::table('registrations'), ['id' => $id]));
     }
 }

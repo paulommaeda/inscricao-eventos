@@ -76,7 +76,7 @@ final class Admin
         if (!$edit) {
             echo '<p><a class="button button-primary" href="' . esc_url(admin_url('admin.php?page=ie-events&edit=0')) . '">Novo evento</a></p><div class="ie-event-grid">';
             foreach (Store::events() as $e) {
-                echo '<article class="ie-panel"><span class="ie-badge">' . esc_html(['draft' => 'Rascunho', 'published' => 'Publicado', 'archived' => 'Arquivado'][$e['status']] ?? $e['status']) . '</span><h2>' . esc_html($e['name']) . '</h2><p>' . esc_html(Domain::dateBR($e['event_date'])) . '</p><p>Inscrições: ' . esc_html(Domain::dateBR($e['registration_start']) . ' a ' . Domain::dateBR($e['registration_end'])) . '</p><code>[inscricao_eventos evento="' . (int) $e['id'] . '"]</code><p><a class="button" href="' . esc_url(admin_url('admin.php?page=ie-events&edit=' . $e['id'])) . '">Editar evento</a> ';
+                echo '<article class="ie-panel"><span class="ie-badge">' . esc_html(['draft' => 'Rascunho', 'published' => 'Publicado', 'archived' => 'Arquivado'][$e['status']] ?? $e['status']) . '</span><h2>' . esc_html($e['name']) . '</h2><p>' . esc_html(Domain::dateBR($e['event_date'])) . '</p><p>Inscrições: ' . esc_html(Domain::dateBR($e['registration_start']) . ' a ' . Domain::dateBR($e['registration_end'])) . '</p><code>[inscricao_eventos evento="' . (int) $e['id'] . '"]</code><p><code>[inscricao_eventos_dashboard evento="' . (int) $e['id'] . '"]</code></p><p><a class="button" href="' . esc_url(admin_url('admin.php?page=ie-events&edit=' . $e['id'])) . '">Editar evento</a> ';
                 if ($e['public_page_id']) { echo '<a class="button" target="_blank" rel="noopener" href="' . esc_url(get_permalink($e['public_page_id'])) . '">Ver página</a>'; }
                 echo '</p>'; self::form('ie_clone_event', ['event_id' => $e['id']]); echo '<button class="button">Duplicar como rascunho</button></form></article>';
             }
@@ -118,7 +118,12 @@ final class Admin
         self::textarea('terms', 'Condições e política do evento', $e['terms'] ?? '');
         self::input('privacy_url', 'URL da política de privacidade', $e['privacy_url'] ?? '', 'url');
         echo '</div><p>Na consulta por CPF são exibidos primeiro nome, lote e informações de pagamento. E-mail, telefone e CPF completo ficam no painel administrativo.</p></div><p><button class="button button-primary button-hero">Salvar evento</button></p></form>';
-        if ($id) { self::form('ie_delete_event', ['event_id' => $id]); echo '<button class="button ie-confirm" data-confirm="Excluir este evento? Só é permitido quando não há inscrições.">Excluir evento sem inscrições</button></form>'; }
+        if ($id) {
+            echo '<div class="ie-panel ie-danger"><h2>Excluir evento permanentemente</h2><p>Remove este evento, todos os lotes, inscrições, pagamentos, créditos locais, sessões e histórico administrativo, incluindo outras contas/ambientes. A página WordPress permanece. Esta ação não cancela nem estorna transações no K8.</p>';
+            self::form('ie_delete_event', ['event_id' => $id]);
+            self::input('confirmation', 'Digite EXCLUIR EVENTO ' . $id . ' para confirmar', '', 'text', 'required autocomplete="off" pattern="EXCLUIR EVENTO ' . $id . '"');
+            echo '<p><button class="button ie-confirm" data-confirm="Excluir permanentemente este evento e TODOS os registros vinculados? Esta ação não pode ser desfeita e não altera transações no K8.">Excluir evento permanentemente</button></p></form></div>';
+        }
         echo '</div>';
     }
     private static function lot($index, array $l): void
@@ -150,13 +155,11 @@ final class Admin
     }
     public static function deleteEvent(): void
     {
-        self::guard('ie_delete_event'); global $wpdb; $id = absint($_POST['event_id'] ?? 0); $lock = '';
+        self::guard('ie_delete_event'); $id = absint($_POST['event_id'] ?? 0);
         try {
-            $lock = Store::lock('event:' . $id); Store::event($id);
-            if ($wpdb->get_var($wpdb->prepare('SELECT id FROM ' . Store::table('registrations') . ' WHERE event_id=%d LIMIT 1', $id))) { throw new \RuntimeException('Este evento possui inscrições. Use a opção Arquivado para preservá-las.'); }
-            Store::begin(); Store::check($wpdb->delete(Store::table('lots'), ['event_id' => $id])); Store::check($wpdb->delete(Store::table('events'), ['id' => $id])); Store::commit(); Store::unlock($lock); $lock = '';
-            self::redirect('ie-events', 'Evento excluído.');
-        } catch (\Throwable $e) { Store::rollback(); if ($lock) { Store::unlock($lock); } self::redirect('ie-events', $e->getMessage(), true); }
+            self::confirmDeletion('EXCLUIR EVENTO ' . $id); Registrations::purgeEvent($id);
+            self::redirect('ie-events', 'Evento e todos os registros vinculados excluídos permanentemente do WordPress.');
+        } catch (\Throwable $e) { self::redirect('ie-events', $e->getMessage(), true, ['edit' => $id]); }
     }
     public static function settings(): void
     {
@@ -168,7 +171,7 @@ final class Admin
         foreach (['client_id' => 'Client ID', 'client_secret' => 'Client Secret', 'aes_key' => 'Chave AES (16 caracteres)'] as $key => $label) { self::input($key, $label, '', 'password', 'autocomplete="new-password"'); }
         self::check('auto_update', 'Instalar automaticamente novas versões do GitHub', (bool) ($s['auto_update'] ?? true));
         echo '</div><p>' . (empty($s['credentials']) ? 'Credenciais ainda não cadastradas.' : 'Credenciais protegidas já cadastradas. Deixe os três campos vazios para mantê-las.') . ' Ao substituir credenciais, preencha os três campos. Testes e produção possuem inscrições e pagamentos separados.</p><button class="button button-primary">Salvar configurações</button></form></div><div class="ie-panel">';
-        self::form('ie_test_k8'); echo '<button class="button">Testar autenticação K8</button><p>O teste utiliza as configurações já salvas e faz uma nova autenticação, sem reutilizar token em cache. Salve alterações antes de testar. Se houver HTTP 400, será mostrado o motivo devolvido pelo K8, sem exibir suas chaves.</p><p>A homologação do checkout exige uma inscrição de teste no sandbox.</p></form></div><div class="ie-panel"><h2>Como colocar no site</h2><p>Use <code>[inscricao_eventos evento="1"]</code> em uma página. Sem o atributo evento, o visitante pode escolher entre os eventos publicados.</p><p>Configure essa página no cadastro do evento para receber o retorno do K8. O endereço do webhook é enviado automaticamente em cada checkout.</p><p>Atualizações: <a href="https://github.com/paulommaeda/inscricao-eventos" target="_blank" rel="noopener">paulommaeda/inscricao-eventos</a>, branch <code>main</code>. O número da versão deve aumentar em cada entrega.</p><p>A conciliação usa WP-Cron a cada cinco minutos. Em sites com pouco tráfego, configure um cron do servidor para chamar <code>wp-cron.php</code> regularmente.</p></div></div>';
+        self::form('ie_test_k8'); echo '<button class="button">Testar autenticação K8</button><p>O teste utiliza as configurações já salvas e faz uma nova autenticação, sem reutilizar token em cache. Salve alterações antes de testar. Se houver HTTP 400, será mostrado o motivo devolvido pelo K8, sem exibir suas chaves.</p><p>A homologação do checkout exige uma inscrição de teste no sandbox.</p></form></div><div class="ie-panel"><h2>Como colocar no site</h2><p>Use <code>[inscricao_eventos evento="1"]</code> em uma página. Sem o atributo evento, o visitante pode escolher entre os eventos publicados.</p><p>Dashboard privado: <code>[inscricao_eventos_dashboard evento="1"]</code>. Somente administradores conectados acessam os dados. Sem o atributo evento, o painel permite escolher o evento.</p><p>Configure essa página no cadastro do evento para receber o retorno do K8. O endereço do webhook é enviado automaticamente em cada checkout.</p><p>Atualizações: <a href="https://github.com/paulommaeda/inscricao-eventos" target="_blank" rel="noopener">paulommaeda/inscricao-eventos</a>, branch <code>main</code>. O número da versão deve aumentar em cada entrega.</p><p>A conciliação usa WP-Cron a cada cinco minutos. Em sites com pouco tráfego, configure um cron do servidor para chamar <code>wp-cron.php</code> regularmente.</p></div></div>';
     }
     public static function saveSettings(): void
     {
@@ -192,42 +195,16 @@ final class Admin
     }
     private static function filters(): array
     {
-        return ['event' => absint($_GET['event'] ?? $_POST['event'] ?? 0), 'status' => sanitize_key(wp_unslash($_GET['status'] ?? $_POST['status'] ?? '')), 'q' => Domain::cut(sanitize_text_field(wp_unslash($_GET['q'] ?? $_POST['q'] ?? '')), 200), 'method' => sanitize_text_field(wp_unslash($_GET['method'] ?? $_POST['method'] ?? '')), 'all_scopes' => absint($_GET['all_scopes'] ?? $_POST['all_scopes'] ?? 0), 'registration_status' => sanitize_key(wp_unslash($_GET['registration_status'] ?? $_POST['registration_status'] ?? 'active'))];
+        return Reports::filters((array) wp_unslash(array_merge($_GET, $_POST)));
     }
-    private static function query(array $f): array
-    {
-        global $wpdb;
-        $r = Store::table('registrations'); $p = Store::table('payments'); $t = Store::table('transactions'); $e = Store::table('events');
-        $where = ['1=1']; $args = [];
-        if (in_array($f['registration_status'] ?? 'active', ['active', 'cancelled', 'deleted'], true)) { $where[] = 'r.status=%s'; $args[] = $f['registration_status'] ?? 'active'; }
-        if (!$f['all_scopes']) {
-            try { $scope = (new Gateway())->scope(); } catch (\Throwable $error) { $scope = ''; }
-            $where[] = 'r.scope=%s'; $args[] = $scope;
-        }
-        if ($f['event']) { $where[] = 'r.event_id=%d'; $args[] = $f['event']; }
-        if (in_array($f['method'], ['Pix', 'Cartao'], true)) { $where[] = 'r.method=%s'; $args[] = $f['method']; }
-        if ($f['q']) {
-            $q = '%' . $wpdb->esc_like($f['q']) . '%'; $where[] = '(r.name LIKE %s OR r.email LIKE %s OR r.cpf_hash=%s)';
-            array_push($args, $q, $q, Security::hash('cpf:' . preg_replace('/\D/', '', $f['q'])));
-        }
-        $paid = 'COALESCE(b.paid,0)';
-        foreach (['pending' => "$paid=0", 'partial' => "$paid>0 AND $paid<r.total", 'paid' => "$paid>=r.total", 'overpaid' => "$paid>r.total"] as $status => $condition) { if ($f['status'] === $status) { $where[] = '(' . $condition . ')'; } }
-        $from = "FROM $r r JOIN $e e ON e.id=r.event_id LEFT JOIN (SELECT p.registration_id,SUM(t.credit) paid FROM $p p JOIN $t t ON t.payment_id=p.id GROUP BY p.registration_id) b ON b.registration_id=r.id WHERE " . implode(' AND ', $where);
-        return [$from, $args];
-    }
-    private static function rows(array $f, int $limit, int $offset): array
-    {
-        global $wpdb; [$from, $args] = self::query($f);
-        return $wpdb->get_results($wpdb->prepare('SELECT r.*,e.name event_name,COALESCE(b.paid,0) paid ' . $from . ' ORDER BY r.id DESC LIMIT %d OFFSET %d', array_merge($args, [$limit, $offset])), ARRAY_A) ?: [];
-    }
+    private static function rows(array $f, int $limit, int $offset): array { return Reports::rows($f, $limit, $offset); }
     public static function dashboard(): void
     {
         echo '<div class="wrap ie-admin"><h1>Acompanhamento de inscrições</h1>'; self::notice();
         if (!empty($_GET['edit_registration'])) { self::editRegistration(absint($_GET['edit_registration'])); echo '</div>'; return; }
         if (!empty($_GET['view'])) { self::detail(absint($_GET['view'])); echo '</div>'; return; }
-        global $wpdb; $f = self::filters(); [$from, $args] = self::query($f);
-        $sql = 'SELECT COUNT(*) count,COALESCE(SUM(r.total),0) total,COALESCE(SUM(COALESCE(b.paid,0)),0) paid,COALESCE(SUM(GREATEST(r.total-COALESCE(b.paid,0),0)),0) balance,COALESCE(SUM(GREATEST(COALESCE(b.paid,0)-r.total,0)),0) overpaid ' . $from;
-        $metrics = $wpdb->get_row($args ? $wpdb->prepare($sql, $args) : $sql, ARRAY_A) ?: ['count' => 0, 'total' => 0, 'paid' => 0, 'balance' => 0, 'overpaid' => 0];
+        try { $f = self::filters(); $metrics = Reports::metrics($f); }
+        catch (\Throwable $e) { echo '<p class="ie-error">' . esc_html($e->getMessage()) . '</p></div>'; return; }
         echo '<div class="ie-metrics">';
         foreach (['count' => 'Inscrições', 'total' => 'Valor inscrito', 'paid' => 'Confirmado pelo K8', 'balance' => 'Saldo a receber', 'overpaid' => 'Pagamentos excedentes'] as $key => $label) { echo '<div class="ie-panel"><span>' . esc_html($label) . '</span><strong>' . esc_html($key === 'count' ? $metrics[$key] : Domain::money((int) $metrics[$key])) . '</strong></div>'; }
         echo '</div><form method="get" class="ie-filters"><input type="hidden" name="page" value="ie-dashboard"><select name="event"><option value="0">Todos os eventos</option>';
@@ -298,9 +275,12 @@ final class Admin
         if (!$deleted) { echo '<a class="button button-primary" href="' . esc_url(admin_url('admin.php?page=ie-dashboard&edit_registration=' . $id)) . '">Editar inscrição</a>'; }
         self::form('ie_registration_action', ['registration_id' => $id, 'mode' => $deleted ? 'restore' : 'trash']);
         echo '<button class="button ' . ($deleted ? '' : 'ie-confirm') . '" data-confirm="Mover esta inscrição para a lixeira e bloquear novos pagamentos? O histórico será preservado.">' . ($deleted ? 'Restaurar inscrição' : 'Excluir inscrição') . '</button></form>';
-        if ($deleted && !Store::payments($id)) { self::form('ie_registration_action', ['registration_id' => $id, 'mode' => 'purge']); echo '<button class="button ie-confirm" data-confirm="Excluir definitivamente este cadastro sem tentativas K8?">Excluir definitivamente</button></form>'; }
         echo '</div>';
         if ($deleted) { echo '<p>Esta inscrição está na lixeira. Os registros K8 continuam disponíveis para conciliação, cancelamento e estorno.</p>'; }
+        echo '<details class="ie-panel ie-danger"><summary>Excluir inscrição permanentemente</summary><p>Remove o cadastro, todas as tentativas, créditos locais, sessões e histórico desta inscrição. Não pode ser desfeito. Esta ação não cancela nem estorna pagamentos no K8.</p>';
+        self::form('ie_registration_action', ['registration_id' => $id, 'mode' => 'purge']);
+        self::input('confirmation', 'Digite EXCLUIR ' . $id . ' para confirmar', '', 'text', 'required autocomplete="off" pattern="EXCLUIR ' . $id . '"');
+        echo '<p><button class="button ie-confirm" data-confirm="Excluir permanentemente esta inscrição e todo seu histórico local? Esta ação não pode ser desfeita e não altera transações no K8.">Excluir definitivamente</button></p></form></details>';
     }
     private static function editRegistration(int $id): void
     {
@@ -354,10 +334,14 @@ final class Admin
         try {
             if ($mode === 'trash') { Registrations::trash($id); }
             elseif ($mode === 'restore') { Registrations::restore($id); }
-            elseif ($mode === 'purge') { Registrations::purge($id); }
+            elseif ($mode === 'purge') { self::confirmDeletion('EXCLUIR ' . $id); Registrations::purge($id); }
             else { throw new \RuntimeException('Ação inválida.'); }
-            self::redirect('ie-dashboard', $mode === 'restore' ? 'Inscrição restaurada.' : ($mode === 'purge' ? 'Cadastro excluído definitivamente.' : 'Inscrição movida para a lixeira. Histórico K8 preservado.'), false, $mode === 'purge' ? [] : ['view' => $id]);
+            self::redirect('ie-dashboard', $mode === 'restore' ? 'Inscrição restaurada.' : ($mode === 'purge' ? 'Inscrição e histórico local excluídos permanentemente do WordPress.' : 'Inscrição movida para a lixeira. Histórico K8 preservado.'), false, $mode === 'purge' ? [] : ['view' => $id]);
         } catch (\Throwable $e) { self::redirect('ie-dashboard', $e->getMessage(), true, ['view' => $id]); }
+    }
+    private static function confirmDeletion(string $expected): void
+    {
+        if (trim((string) wp_unslash($_POST['confirmation'] ?? '')) !== $expected) { throw new \RuntimeException('Digite exatamente ' . $expected . ' para confirmar a exclusão permanente.'); }
     }
     public static function cancelPayment(): void
     {

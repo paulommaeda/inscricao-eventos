@@ -1,6 +1,9 @@
 <?php
 require_once __DIR__ . '/bootstrap.php';
 require_once dirname(__DIR__) . '/includes/Registrations.php';
+require_once dirname(__DIR__) . '/includes/Reports.php';
+require_once dirname(__DIR__) . '/includes/Api.php';
+require_once dirname(__DIR__) . '/includes/Dashboard.php';
 require_once dirname(__DIR__) . '/includes/Admin.php';
 $GLOBALS['test_admin'] = true;
 function current_user_can($capability) { return $GLOBALS['test_admin'] && $capability === 'manage_options'; }
@@ -17,3 +20,13 @@ function selected($left, $right, $echo = true) { $s = (string) $left === (string
 function wp_nonce_field($action) { echo '<input type="hidden" name="_wpnonce" value="' . InscricaoEventos\Security::hash('nonce:' . $action) . '">'; }
 function check_admin_referer($action) { if (!hash_equals(InscricaoEventos\Security::hash('nonce:' . $action), (string) ($_POST['_wpnonce'] ?? ''))) { wp_die('Nonce inválido.'); } }
 function wp_safe_redirect($url) { header('Location: ' . $url, true, 303); }
+function is_user_logged_in() { return $GLOBALS['test_logged_in'] ?? $GLOBALS['test_admin']; }
+function wp_create_nonce($action) { return InscricaoEventos\Security::hash('nonce:' . $action); }
+function wp_login_url($redirect) { return 'https://event.test/wp-login.php?redirect_to=' . urlencode($redirect); }
+function shortcode_atts($defaults, $attributes) { return array_merge($defaults, array_intersect_key((array) $attributes, $defaults)); }
+function plugins_url($path, $file) { return '/' . $path; }
+function nocache_headers() { if (!headers_sent()) header('Cache-Control: no-store, private'); }
+function wp_enqueue_style(...$args) { $GLOBALS['test_styles'][$args[0]] = $args; }
+function wp_enqueue_script(...$args) { $GLOBALS['test_scripts'][$args[0]] = $args; }
+function wp_add_inline_script($handle, $content, $position) { $GLOBALS['test_inline'][$handle] = $content; }
+if (!defined('IE_FILE')) define('IE_FILE', dirname(__DIR__) . '/inscricao-eventos.php');

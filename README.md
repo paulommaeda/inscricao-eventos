@@ -45,7 +45,7 @@ O cartão usa as modalidades à vista e parcelado sem juros do checkout K8. O ev
 
 Sem ID, a página permite escolher um evento publicado. Cada evento tem nome, descrição, local, logo, imagem de capa, três cores, política de privacidade e condições de inscrição. O formulário se adapta ao celular e não exige conta WordPress. O checkout mantém a identificação do prestador de pagamento.
 
-Datas incluem todo o dia no fuso configurado no evento, inicialmente `America/Sao_Paulo`. Arquivar impede novas inscrições/pagamentos e mantém o histórico. Excluir um evento é permitido apenas quando não há inscrições.
+Datas incluem todo o dia no fuso configurado no evento, inicialmente `America/Sao_Paulo`. Arquivar impede novas inscrições/pagamentos e mantém o histórico. A exclusão permanente do evento remove também seus lotes e todas as inscrições/registros locais vinculados, de todas as contas e ambientes, mediante confirmação digitada. A página WordPress permanece e as transações externas no K8 não são canceladas ou estornadas por essa exclusão.
 
 ## Acompanhamento e conciliação
 
@@ -59,8 +59,32 @@ Desde a versão 1.1.0, o painel oferece **Editar inscrição**, **Excluir inscri
 - O preço, o lote e as parcelas contratados ficam guardados na inscrição. A edição cadastral preserva o CPF original de cada tentativa já emitida, inclusive nas versões anteriores; pagamentos futuros usam o CPF corrigido. Sessões públicas antigas são encerradas ao editar.
 - A situação **Cancelada** bloqueia novos pagamentos da inscrição no site. As transações K8 continuam sendo conciliadas.
 - **Excluir inscrição** move para a lixeira, bloqueia novos pagamentos e conserva tentativas/créditos. A inscrição pode ser restaurada. Solicite cancelamento/estorno dos pagamentos pela ação K8 quando necessário; mover para lixeira não envia essa solicitação.
-- **Excluir definitivamente** está disponível na lixeira somente para cadastros sem nenhuma tentativa K8. Cadastros com tentativas continuam na lixeira para preservar a conciliação de pagamentos e estornos tardios.
-- As operações registram usuário WordPress, data UTC e observações no histórico administrativo.
+- **Excluir inscrição permanentemente** fica nos detalhes da inscrição, inclusive quando há pagamentos. Digite `EXCLUIR ID` (exemplo: `EXCLUIR 24`) e confirme. Remove o cadastro, tentativas, créditos locais, sessões e histórico administrativo em uma transação; a lixeira continua disponível para exclusão reversível. Não envia cancelamento/estorno ao K8.
+- **Excluir evento permanentemente** fica no final da edição do evento. Digite `EXCLUIR EVENTO ID` (exemplo: `EXCLUIR EVENTO 1`) e confirme. Remove o evento, lotes, todas as inscrições e seus registros vinculados, incluindo canceladas, lixeira e outras contas/ambientes. Preserva a página WordPress.
+- Exclusões exigem administrador, POST, nonce e confirmação do ID no servidor. Bloqueios serializam a remoção com criação de inscrições, edição, conciliação e estornos; uma falha de banco desfaz toda a operação. IDs não são reutilizados, e notificações de tentativas removidas são recusadas, sem recriar cadastro/crédito.
+- Edição, lixeira, restauração e ações K8 registram usuário WordPress, data UTC e observações no histórico administrativo. A exclusão permanente remove também esse histórico.
+
+### Dashboard do evento por shortcode
+
+Crie uma página para a organização e adicione:
+
+```text
+[inscricao_eventos_dashboard evento="1"]
+```
+
+Troque `1` pelo ID do evento. Também aceita `[dashboard_evento id="1"]`. Sem ID, `[inscricao_eventos_dashboard]` permite escolher um evento ou acompanhar todos. A lista de eventos mostra o shortcode de cada um.
+
+O acesso exige uma conta WordPress com `manage_options` (administrador). Visitantes recebem apenas uma indicação de acesso restrito; a API também verifica permissão, usa o nonce REST autenticado e não permite cache dos dados financeiros. Páginas com esse shortcode sinalizam `DONOTCACHEPAGE`. Se o cache externo ignorar esse sinal, exclua a página do cache para manter login e nonce atualizados.
+
+O painel mostra:
+
+- Inscrições, valor contratado, recebido/confirmado, a receber, percentual de quitação, quitadas, parciais e sem pagamento.
+- Dias até o evento, prazo para quitar, situação das inscrições e lote vigente, usando o fuso configurado. Data não configurada aparece como **A definir**; datas passadas são identificadas.
+- Financeiro por lote (nome congelado na inscrição), formas de pagamento, evolução dos cadastros e alertas de conferência, erro, cancelamento/estorno em andamento, excedentes e saldo após o prazo.
+- Filtros por evento, lote, pagamento, método, situação da inscrição, nome/e-mail/CPF completo e período de cadastro. O período inclui os dias completos no fuso do evento; na visão de todos os eventos usa UTC. O gráfico de cadastros usa UTC e os últimos 30 dias com registros.
+- Lista com contatos, valores, saldo, paginação de 25 registros e acesso aos detalhes/edição no WordPress. CSV aplica exatamente os mesmos filtros, incluindo lote, período e contas/ambientes.
+
+Os totais e gráficos correspondem às inscrições filtradas, não apenas à página da tabela. O padrão usa inscrições ativas e a conta/ambiente K8 atual. Cartão aprovado é reconhecido integralmente como confirmado; não é uma demonstração de liquidação bancária ou de taxas do K8. Pagamentos excedentes permanecem destacados e não compensam a dívida de outras pessoas. As datas filtram o cadastro; o financeiro inclui todo o histórico conciliado dessas inscrições. **Atualizar** lê o saldo local conferido, sem emitir cobranças ou solicitar estornos; conciliação permanece nas ações de detalhe, cron e retornos.
 
 ### Cancelamento e estorno no K8 Pay
 
@@ -119,13 +143,14 @@ php tests/financial.php
 php tests/authentication.php
 php tests/webhook.php
 php tests/management.php
+php tests/dashboard.php
 npm install
 npx playwright install chromium
 npm test
 python3 scripts/build.py
 ```
 
-Os testes financeiros usam dublês de WordPress/banco/K8 para verificar valores, CPF, limites de lotes, aprovação, estorno, duplicidade, rollback, proteção de origem e separação de ambientes. Os testes de webhook cobrem POST/GET, `ID_BknBank`, JSON/formulário, colisão de parâmetros, tokens, falhas temporárias, correlação e repetição sem duplicar crédito. Incluem GUIDs equivalentes, registros financeiros antigos, divergências por campo, busca exata de pedido após referência não localizada e rejeição de resultados não relacionados. Os testes de gestão verificam edição de CPF sem alterar cobranças antigas, lixeira, exclusão restrita, autorização, nonces, cancelamento/estorno, timeout e confirmação posterior. Os testes de navegador verificam participante e painel administrativo; o painel usa a renderização e os controladores PHP reais com banco e K8 simulados.
+Os testes financeiros usam dublês de WordPress/banco/K8 para verificar valores, CPF, limites de lotes, aprovação, estorno, duplicidade, rollback, proteção de origem e separação de ambientes. Os testes de webhook cobrem POST/GET, `ID_BknBank`, JSON/formulário, colisão de parâmetros, tokens, falhas temporárias, correlação e repetição sem duplicar crédito. Incluem GUIDs equivalentes, registros financeiros antigos, divergências por campo, busca exata de pedido após referência não localizada e rejeição de resultados não relacionados. Os testes de gestão verificam edição de CPF sem alterar cobranças antigas, lixeira, autorização, nonces, cancelamento/estorno, timeout e confirmação posterior. Os testes de dashboard executam os SELECTs reais em SQLite com compatibilidade explícita para GREATEST/LIKE, verificando agregações, filtros, fuso, paginação, autorização e remoção completa com rollback. O helper requer Python 3. Os testes de navegador verificam participante, dashboard por shortcode e painel administrativo; o painel usa a renderização e os controladores PHP reais com banco e K8 simulados.
 
 Nenhum teste automatizado cria cobrança real. A versão inicial foi validada localmente com respostas simuladas; instalação no seu WordPress, autorização das credenciais, opções efetivas de parcelamento e callback real precisam de homologação na conta K8.
 

@@ -49,7 +49,7 @@ R::trash($r['id']); same(S::registration($r['id'])['status'], 'deleted', 'Delete
 same(S::paid($r['id']), $balance, 'Delete preserves confirmed credit'); same(count(S::payments($r['id'])), $paymentCount, 'Delete preserves all attempts');
 $public = S::publicRegistration(S::registration($r['id'])); same($public['can_pay'], false, 'Trashed registration cannot pay'); same(array_filter(array_column($public['payments'], 'url')), [], 'Trashed registration exposes no checkout links');
 failure(fn() => P::create($new, '10')); same(count($GLOBALS['http_calls']), $calls, 'Stale public session cannot create charge after trash');
-failure(fn() => R::purge($r['id'])); same(S::paid($r['id']), $balance, 'Financial history prevents permanent purge');
+same(S::paid($r['id']), $balance, 'Trash keeps credit until an explicit permanent deletion');
 R::restore($r['id']); same(S::registration($r['id'])['status'], 'active', 'Trash can be restored');
 R::save($r['id'], array_merge($edit, ['method' => 'Cartao', 'status' => 'cancelled']));
 same(S::publicRegistration(S::registration($r['id']))['can_pay'], false, 'Cancelled registration cannot pay'); failure(fn() => P::create($r, '10'));

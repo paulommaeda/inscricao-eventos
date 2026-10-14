@@ -17,6 +17,7 @@ if ($saved) {
     update_option('ie_settings', ['environment' => 'sandbox', 'credentials' => C::seal(json_encode(['id' => 'ui-fixture-client', 'secret' => 'ui-fixture-secret', 'aes' => '1234567890abcdef']))]);
     $g = new G(); $scope = $g->scope(); $GLOBALS['http_queue'][] = ['code' => 200, 'body' => '{"access_token":"ui-fixture-token","expires_in":3600}']; $g->authenticate(); $GLOBALS['http_calls'] = [];
     $e = array_merge(S::sample(), ['event_date' => '2028-02-29', 'payment_deadline' => '2028-02-29', 'status' => 'published', 'minimum_entry' => 100]); $eid = S::insert('events', $e);
+    foreach ($e['lots'] as $lot) { $lot['event_id'] = $eid; $lot['price'] = InscricaoEventos\Domain::cents($lot['price']); S::insert('lots', $lot); }
     $rid = S::insert('registrations', ['event_id' => $eid, 'scope' => $scope, 'lot_id' => 1, 'lot_name' => 'Lote 1', 'total' => 49000, 'max_installments' => 10, 'method' => 'Pix', 'name' => 'João Teste', 'email' => 'joao@example.test', 'phone' => '41999999999', 'cpf_hash' => C::hash('cpf:52998224725'), 'cpf_encrypted' => C::seal('52998224725'), 'terms_snapshot' => 'Condições de teste', 'terms_accepted_at' => current_time('mysql', true), 'created_at' => current_time('mysql', true)]);
     $pid = S::insert('payments', ['registration_id' => $rid, 'scope' => $scope, 'reference' => 'IE-uifixture', 'cpf_snapshot' => C::seal('52998224725'), 'amount' => 5000, 'method' => 'Pix', 'checkout_id' => 'checkout-uifixture', 'checkout_url' => 'https://sandbox.meuk8.com.br/PagamentosUI/checkout?id=mock', 'state' => 'pending', 'last_error' => '', 'operator_note' => '']);
     $payload = ['Retorno' => 'OK', 'Identificador' => 'ui-transaction', 'Referencia' => 'IE-uifixture', 'NumeroPedido' => 'IE-uifixture', 'ClienteCPFCNPJ' => '52998224725', 'Tipo' => 'Pix', 'Valor' => 50, 'ValorPago' => 50, 'Estado' => 'Aprovada'];
@@ -34,11 +35,12 @@ try {
             $GLOBALS['http_queue'][] = ['code' => 200, 'body' => json_encode($data)];
             if ($action === 'ie_cancel_payment') { $GLOBALS['http_queue'][] = ['code' => 200, 'body' => '{"Retorno":"OK","Posterior":false}']; $data['Estado'] = 'Estornado'; $GLOBALS['http_queue'][] = ['code' => 200, 'body' => json_encode($data)]; }
         }
-        $handlers = ['ie_save_registration' => 'saveRegistration', 'ie_registration_action' => 'registrationAction', 'ie_cancel_payment' => 'cancelPayment', 'ie_sync_payment' => 'syncPayment', 'ie_review_cancellation' => 'reviewCancellation'];
+        $handlers = ['ie_save_registration' => 'saveRegistration', 'ie_registration_action' => 'registrationAction', 'ie_cancel_payment' => 'cancelPayment', 'ie_sync_payment' => 'syncPayment', 'ie_review_cancellation' => 'reviewCancellation', 'ie_delete_event' => 'deleteEvent'];
         if (!isset($handlers[$action])) throw new RuntimeException('Unsupported fixture action');
         A::{$handlers[$action]}(); return;
     }
     header('Content-Type: text/html; charset=utf-8'); echo '<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/assets/admin.css"><style>body{margin:0;padding:18px;background:#f0f0f1;font:14px system-ui;color:#1d2327}*{box-sizing:border-box}.button{display:inline-block;padding:8px 12px;color:#215c4a;border:1px solid #a5b5a5;border-radius:4px;background:white;text-decoration:none;cursor:pointer}input,select,textarea{font:inherit;padding:8px;border:1px solid #aab4a7;border-radius:4px}.widefat{width:100%;border-collapse:collapse}.widefat th{text-align:left;padding:12px;background:#e7ece2}.notice{padding:12px;background:#fff;border-left:4px solid #215c4a}code{font-size:12px}</style>';
-    if (!isset($_GET['view']) && !isset($_GET['edit_registration'])) { $_GET['view'] = 1; }
-    A::dashboard(); echo '<script src="/assets/admin.js"></script></html>';
+    if (($_GET['page'] ?? '') === 'ie-events') { A::events(); }
+    else { if (!isset($_GET['view']) && !isset($_GET['edit_registration']) && isset($wpdb->rows['wp_ie_registrations'][1])) { $_GET['view'] = 1; } A::dashboard(); }
+    echo '<script src="/assets/admin.js"></script></html>';
 } catch (Throwable $e) { http_response_code(403); echo htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8'); }

@@ -6,7 +6,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 root = Path(__file__).resolve().parents[1]
 dest = root / 'dist'
 dest.mkdir(exist_ok=True)
-out = dest / 'inscricao-eventos-1.1.0.zip'
+out = dest / 'inscricao-eventos-1.2.0.zip'
 skip = {'tests', 'scripts', 'dist', 'node_modules', '.git', '.github', 'validation'}
 with ZipFile(out, 'w', ZIP_DEFLATED) as archive:
     for file in sorted(root.rglob('*')):

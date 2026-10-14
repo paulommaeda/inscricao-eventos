@@ -6,7 +6,7 @@ final class Plugin
 {
     public static function boot(): void
     {
-        Api::boot(); Admin::boot();
+        Api::boot(); Admin::boot(); Dashboard::boot();
         add_shortcode('inscricao_eventos', [self::class, 'shortcode']);
         add_shortcode('inscricao_evento', [self::class, 'shortcode']);
         add_filter('cron_schedules', static function ($s) { $s['ie_five_minutes'] = ['interval' => 300, 'display' => 'A cada cinco minutos']; return $s; });

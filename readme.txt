@@ -2,7 +2,7 @@
 Contributors: paulommaeda
 Requires at least: 6.4
 Requires PHP: 8.1
-Stable tag: 1.1.0
+Stable tag: 1.2.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -11,8 +11,16 @@ Eventos com identidade visual própria, lotes e inscrições com cartão ou paga
 == Installation ==
 Instale o ZIP, ative, configure as credenciais K8 Pay e os dados do evento no menu Inscrições.
 Use [inscricao_eventos evento="1"] em uma página. A ativação cria o modelo do retiro como rascunho.
+Use [inscricao_eventos_dashboard evento="1"] para o dashboard privado da organização.
 
 == Changelog ==
+= 1.2.0 =
+* Exclusão permanente de inscrições com pagamentos e de eventos com todos os registros vinculados.
+* Confirmação digitada por ID, transação de banco, bloqueios e remoção completa de dados locais.
+* Shortcode [inscricao_eventos_dashboard evento="1"] com acesso restrito a administradores.
+* Financeiro recebido/a receber, prazos, filtros, lotes, meios, evolução, pendências, paginação e CSV.
+* Testes SQL de totais/filtros, rollback de exclusão, controle de acesso e interface desktop/celular.
+
 = 1.1.0 =
 * Edição administrativa de inscrições, situação, observações e forma de futuros pagamentos.
 * Exclusão para lixeira, restauração e exclusão definitiva de cadastros sem tentativas K8.

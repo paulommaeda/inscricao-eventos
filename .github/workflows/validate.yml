@@ -17,6 +17,7 @@ jobs:
       - run: php tests/authentication.php
       - run: php tests/webhook.php
       - run: php tests/management.php
+      - run: php tests/dashboard.php
   browser:
     runs-on: ubuntu-latest
     steps:
