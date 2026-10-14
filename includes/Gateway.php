@@ -2,7 +2,8 @@
 namespace InscricaoEventos;
 if (!defined('ABSPATH')) { exit; }
 
-final class ReferenceNotFound extends \RuntimeException {}
+class GatewayRejected extends \RuntimeException {}
+final class ReferenceNotFound extends GatewayRejected {}
 
 final class Gateway
 {
@@ -89,7 +90,7 @@ final class Gateway
     }
     public function request(string $path, array $body): array
     {
-        $allowed = ['/v2/CriaTransacaoCheckout', '/api/ConsultaTransacao', '/api/ConsultaTransacaoReferencia', '/api/ConsultaTransacoes'];
+        $allowed = ['/v2/CriaTransacaoCheckout', '/api/ConsultaTransacao', '/api/ConsultaTransacaoReferencia', '/api/ConsultaTransacoes', '/api/CancelaTransacao', '/api/EstornaTransacaoPIx'];
         if (!in_array($path, $allowed, true)) { throw new \RuntimeException('Operação K8 não permitida.'); }
         for ($attempt = 0; $attempt < 2; $attempt++) {
             $r = $this->transport($path, ['method' => 'POST', 'headers' => ['Accept' => 'application/json', 'Content-Type' => 'application/json', 'Authorization' => 'Bearer ' . $this->authenticate(), 'Aeskey' => $this->credentials['aes']], 'body' => self::encode($body, $this->credentials['aes'])]);
@@ -104,7 +105,7 @@ final class Gateway
                 $detail = preg_replace('/\b\d{11,14}\b/', '[documento oculto]', $detail);
                 $message = 'K8 não confirmou esta operação.' . ($detail ? ' Retorno K8: ' . Domain::cut(sanitize_text_field($detail), 300) . '.' : '') . ' Confira a tentativa no painel K8.';
                 if ($path === '/api/ConsultaTransacaoReferencia' && preg_match('/refer[eê]ncia\b.*n[aã]o\s+localizad[ao]/iu', $detail)) { throw new ReferenceNotFound($message); }
-                throw new \RuntimeException($message);
+                throw new GatewayRejected($message);
             }
             return $data;
         }

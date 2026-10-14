@@ -46,10 +46,12 @@
       return `<form data-form="lookup" class="ie-form ie-lookup"><span class="ie-eyebrow">Minha inscrição</span><h2>Continue de onde parou</h2><p>Informe seu CPF para consultar o saldo e fazer um novo pagamento.</p><label>CPF<input name="cpf" inputmode="numeric" autocomplete="off" maxlength="14" placeholder="000.000.000-00" data-cpf required></label><button type="submit" class="ie-btn">Consultar inscrição <span aria-hidden="true">→</span></button></form>`;
     }
     function accountView(a) {
-      const outstanding = a.payments.find(p => ['pending', 'review', 'creating'].includes(p.state));
-      const labels = { pending: 'Aguardando confirmação', creating: 'Preparando pagamento', review: 'Em conferência', paid: 'Confirmado', closed: 'Encerrado' };
+      const outstanding = a.payments.find(p => ['pending', 'review', 'creating', 'canceling'].includes(p.state));
+      const labels = { pending: 'Aguardando confirmação', creating: 'Preparando pagamento', review: 'Em conferência', paid: 'Confirmado', closed: 'Encerrado', canceling: 'Cancelamento / estorno em andamento' };
       let pay = '';
-      if (a.balance === 0) pay = '<div class="ie-success"><b>Inscrição quitada!</b><p>Seus pagamentos foram confirmados. Esperamos você no evento.</p></div>';
+      if (a.registration_status && a.registration_status !== 'active') pay = `<div class="ie-deadline"><b>${a.registration_status === 'deleted' ? 'Inscrição excluída' : 'Inscrição cancelada'}</b><p>Entre em contato com a organização para conferir a inscrição e seus pagamentos.</p></div>`;
+      else if (outstanding?.state === 'canceling') pay = '<div class="ie-deadline"><b>Cancelamento / estorno em conferência</b><p>O saldo será atualizado após a confirmação do K8. Acompanhe pelo botão Atualizar saldo.</p></div>';
+      else if (a.balance === 0) pay = '<div class="ie-success"><b>Inscrição quitada!</b><p>Seus pagamentos foram confirmados. Esperamos você no evento.</p></div>';
       else if (outstanding) pay = outstanding.url ? `<div class="ie-payment-box"><h3>Há um pagamento em andamento</h3><p>Conclua o pagamento de ${money(outstanding.amount)} ou atualize após pagar.</p><a class="ie-btn" href="${esc(outstanding.url)}">Continuar pagamento no K8 →</a></div>` : '<div class="ie-deadline"><b>Pagamento em conferência</b><p>Procure a organização antes de gerar outra tentativa.</p></div>';
       else if (a.can_pay) pay = `<form data-form="pay" class="ie-payment-box"><h3>${a.method === 'Pix' ? 'Quanto deseja pagar agora?' : 'Concluir pagamento no cartão'}</h3>${a.method === 'Pix' ? `<p>Escolha qualquer valor até o saldo devedor.</p><label>Valor do PIX (R$)<input name="amount" type="number" inputmode="decimal" min="0.01" max="${(a.balance / 100).toFixed(2)}" step="0.01" required placeholder="Ex.: 100,00"></label>` : `<p>Saldo total de ${money(a.balance)}, em até ${a.max_installments}x no K8.</p><input type="hidden" name="amount" value="${(a.balance / 100).toFixed(2)}">`}<button type="submit" class="ie-btn">Pagar agora →</button></form>`;
       else pay = '<div class="ie-deadline"><b>Novos pagamentos indisponíveis</b><p>Procure a organização para orientar a quitação.</p></div>';
@@ -69,7 +71,7 @@
     }
     function schedulePoll() {
       clearTimeout(timer);
-      if (!state.account || !state.account.payments.some(p => p.state === 'pending') || state.polls >= 20) return;
+      if (!state.account || !state.account.payments.some(p => ['pending', 'canceling'].includes(p.state)) || state.polls >= 20) return;
       timer = setTimeout(async () => {
         if (document.hidden || state.busy) { schedulePoll(); return; }
         state.polls++;

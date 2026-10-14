@@ -51,6 +51,35 @@ Datas incluem todo o dia no fuso configurado no evento, inicialmente `America/Sa
 
 O painel **Inscrições → Acompanhamento** mostra inscritos, valor total, confirmado, saldo e excedentes. Inclui filtros por evento, situação, método e nome/e-mail/CPF, paginação, detalhe da inscrição e exportação CSV.
 
+Desde a versão 1.1.0, o painel oferece **Editar inscrição**, **Excluir inscrição**, **Restaurar** e ações K8 em cada tentativa. O filtro de inscrições ativas é inicial; escolha **Canceladas**, **Lixeira** ou **Todas as inscrições** para incluir os demais registros nos totais e na exportação.
+
+### Editar e excluir inscrições
+
+- A edição permite corrigir nome, e-mail, telefone, CPF, observações internas, situação da inscrição e forma de futuros pagamentos. A troca de método exige concluir as tentativas em andamento e usar um método habilitado no evento.
+- O preço, o lote e as parcelas contratados ficam guardados na inscrição. A edição cadastral preserva o CPF original de cada tentativa já emitida, inclusive nas versões anteriores; pagamentos futuros usam o CPF corrigido. Sessões públicas antigas são encerradas ao editar.
+- A situação **Cancelada** bloqueia novos pagamentos da inscrição no site. As transações K8 continuam sendo conciliadas.
+- **Excluir inscrição** move para a lixeira, bloqueia novos pagamentos e conserva tentativas/créditos. A inscrição pode ser restaurada. Solicite cancelamento/estorno dos pagamentos pela ação K8 quando necessário; mover para lixeira não envia essa solicitação.
+- **Excluir definitivamente** está disponível na lixeira somente para cadastros sem nenhuma tentativa K8. Cadastros com tentativas continuam na lixeira para preservar a conciliação de pagamentos e estornos tardios.
+- As operações registram usuário WordPress, data UTC e observações no histórico administrativo.
+
+### Cancelamento e estorno no K8 Pay
+
+Abra o detalhe da inscrição e a seção **Cancelar transação / estornar pagamento no K8**. Confira o **ID da transação** desejada, selecione a operação, registre o motivo e marque a confirmação. A ação exige administrador, nonce e envio POST. O plugin consulta o K8 e verifica conta/ambiente, ID, CPF original, pedido/referência/checkout, método e valor antes de solicitar qualquer alteração.
+
+O cancelamento usa `/api/CancelaTransacao`. Para PIX já aprovado, escolha **Estornar pagamento aprovado**, que utiliza `/api/EstornaTransacaoPIx`; para cartão, o estorno utiliza o cancelamento da transação. A disponibilidade depende do estado e das permissões do K8. O formulário identifica uma transação por vez; o identificador do checkout não substitui o da transação.
+
+A resposta `Retorno=OK`, inclusive com `Posterior=false`, registra a solicitação sem reduzir o crédito automaticamente. O plugin consulta novamente e aguarda um estado final como `Estornado` ou `Cancelada` para atualizar o saldo. Enquanto houver cancelamento em andamento, uma nova cobrança fica bloqueada. Cron, retorno K8 e botão de conciliação acompanham o resultado; não reenviam o pedido de cancelamento/estorno.
+
+Se o envio tiver timeout, o pedido fica em conferência e outro clique não o repete. Após conferir no painel K8 a inexistência de solicitação em andamento, o administrador pode registrar essa conferência; uma nova consulta ainda precisa confirmar que o K8 não informa processamento de cancelamento/estorno. Uma rejeição explícita do K8 é mostrada com o motivo, sem declarar a transação cancelada.
+
+As rotas estão documentadas em [cancelamento de transação](https://docs.meuk8.com.br/reference/cancelatransacao_cancelatransacao_cancelatransacao_post) e [estorno PIX](https://docs.meuk8.com.br/reference/estornatransacaopix_estornatransacaopix_estornatransacaopix_post). Essas ações só são enviadas ao clicar e confirmar no WordPress.
+
+### Diagnóstico do retorno
+
+Depois de **Consultar e conciliar no K8**, abra **Diagnóstico da última consulta K8**. A tabela compara os campos locais e os devolvidos pela API: ID, referência, pedido, checkout, CPF original da cobrança, método, valor e estado. Divergências são identificadas sem mostrar CPF completo nem credenciais. O diagnóstico é administrativo e não aparece na consulta pública.
+
+Esse registro permite identificar a resposta real da conta K8 quando a conciliação continua falhando. Os testes automatizados não confirmam o pagamento real nem substituem a conferência dessa tabela no WordPress.
+
 O endereço do webhook é enviado automaticamente em cada checkout. Cada endereço tem um token próprio. O estado recebido no webhook e o retorno do navegador não fazem baixa: o servidor consulta a API K8 e confere ID da transação, CPF, método, valor e vínculo com a cobrança (referência, número do pedido ou checkout). Pelo menos um vínculo precisa corresponder, e nenhum vínculo informado pode contradizer a cobrança local.
 
 Desde a versão 1.0.2, o retorno lê `ID_BknBank` na URL, inclusive em POST sem corpo, além de `Identificador` no JSON, IDs em formulário e GET de recuperação. O ID do pagamento é obtido exclusivamente do caminho da URL, e o token exclusivamente da query string. Checkouts antigos conservam o endereço e o token. Após consulta e conferência, a resposta é HTTP 200 com `{"Retorno":"OK","ok":true}`. Falhas de conciliação devolvem HTTP 503 para nova tentativa; token inválido devolve HTTP 403.
@@ -89,13 +118,14 @@ Para novas entregas, aumente a versão no cabeçalho de `inscricao-eventos.php`,
 php tests/financial.php
 php tests/authentication.php
 php tests/webhook.php
+php tests/management.php
 npm install
 npx playwright install chromium
 npm test
 python3 scripts/build.py
 ```
 
-Os testes financeiros usam dublês de WordPress/banco/K8 para verificar valores, CPF, limites de lotes, aprovação, estorno, duplicidade, rollback, proteção de origem e separação de ambientes. Os testes de webhook cobrem POST/GET, `ID_BknBank`, JSON/formulário, colisão de parâmetros, tokens, falhas temporárias, correlação e repetição sem duplicar crédito. Incluem GUIDs equivalentes, registros financeiros antigos, divergências por campo, busca exata de pedido após referência não localizada e rejeição de resultados não relacionados. Os testes de navegador simulam a API localmente para verificar desktop/celular, cadastro, CPF, pagamentos, retorno, pendências e erros.
+Os testes financeiros usam dublês de WordPress/banco/K8 para verificar valores, CPF, limites de lotes, aprovação, estorno, duplicidade, rollback, proteção de origem e separação de ambientes. Os testes de webhook cobrem POST/GET, `ID_BknBank`, JSON/formulário, colisão de parâmetros, tokens, falhas temporárias, correlação e repetição sem duplicar crédito. Incluem GUIDs equivalentes, registros financeiros antigos, divergências por campo, busca exata de pedido após referência não localizada e rejeição de resultados não relacionados. Os testes de gestão verificam edição de CPF sem alterar cobranças antigas, lixeira, exclusão restrita, autorização, nonces, cancelamento/estorno, timeout e confirmação posterior. Os testes de navegador verificam participante e painel administrativo; o painel usa a renderização e os controladores PHP reais com banco e K8 simulados.
 
 Nenhum teste automatizado cria cobrança real. A versão inicial foi validada localmente com respostas simuladas; instalação no seu WordPress, autorização das credenciais, opções efetivas de parcelamento e callback real precisam de homologação na conta K8.
 

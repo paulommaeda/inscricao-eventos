@@ -70,6 +70,10 @@ final class Store
                 total bigint NOT NULL,
                 max_installments int NOT NULL,
                 method varchar(10) NOT NULL,
+                status varchar(20) NOT NULL DEFAULT 'active',
+                admin_note text DEFAULT NULL,
+                updated_at datetime DEFAULT NULL,
+                deleted_at datetime DEFAULT NULL,
                 name varchar(200) NOT NULL,
                 email varchar(254) NOT NULL,
                 phone varchar(20) NOT NULL,
@@ -87,6 +91,8 @@ final class Store
                 scope char(64) NOT NULL,
                 amount bigint NOT NULL,
                 method varchar(10) NOT NULL,
+                cpf_snapshot text DEFAULT NULL,
+                diagnostic_json longtext DEFAULT NULL,
                 checkout_id varchar(100) DEFAULT NULL,
                 checkout_url text NOT NULL,
                 remote_id_hint varchar(100) NOT NULL DEFAULT '',
@@ -110,9 +116,23 @@ final class Store
                 credit bigint NOT NULL DEFAULT 0,
                 paid_at varchar(40) NOT NULL DEFAULT '',
                 synced_at datetime NOT NULL,
+                cancel_status varchar(20) NOT NULL DEFAULT '',
+                cancel_operation varchar(20) NOT NULL DEFAULT '',
+                cancel_requested_at datetime DEFAULT NULL,
+                cancel_error varchar(500) NOT NULL DEFAULT '',
+                cancel_actor bigint unsigned NOT NULL DEFAULT 0,
                 PRIMARY KEY  (id),
                 UNIQUE KEY scope_remote (scope,remote_id),
                 KEY payment_id (payment_id)",
+            'audit' => "id bigint unsigned NOT NULL AUTO_INCREMENT,
+                registration_id bigint unsigned NOT NULL,
+                payment_id bigint unsigned NOT NULL DEFAULT 0,
+                actor_id bigint unsigned NOT NULL DEFAULT 0,
+                action varchar(40) NOT NULL,
+                note text NOT NULL,
+                created_at datetime NOT NULL,
+                PRIMARY KEY  (id),
+                KEY registration_created (registration_id,created_at)",
             'sessions' => "token_hash char(64) NOT NULL,
                 registration_id bigint unsigned NOT NULL,
                 expires_at bigint NOT NULL,
@@ -129,6 +149,10 @@ final class Store
             if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($table))) !== $table) { throw new \RuntimeException('Falha criando as tabelas de inscrições.'); }
             $engine = $wpdb->get_row($wpdb->prepare('SHOW TABLE STATUS WHERE Name=%s', $table), ARRAY_A);
             if (strtolower($engine['Engine'] ?? '') !== 'innodb') { throw new \RuntimeException('O plugin precisa de tabelas InnoDB para proteger as operações financeiras.'); }
+        }
+        foreach (['registrations' => ['status', 'admin_note', 'updated_at', 'deleted_at'], 'payments' => ['cpf_snapshot', 'diagnostic_json', 'remote_id_hint', 'webhook_at', 'webhook_error'], 'transactions' => ['cancel_status', 'cancel_operation', 'cancel_requested_at', 'cancel_error', 'cancel_actor']] as $name => $required) {
+            $columns = $wpdb->get_col('SHOW COLUMNS FROM ' . self::table($name));
+            if (!is_array($columns) || array_diff($required, $columns)) { throw new \RuntimeException('Não foi possível atualizar as colunas da tabela de ' . $name . '. Confira as permissões do banco.'); }
         }
         update_option('ie_schema_version', IE_VERSION, false);
     }
@@ -151,9 +175,9 @@ final class Store
         global $wpdb; $r = $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . self::table('registrations') . ' WHERE id=%d', $id), ARRAY_A);
         if (!$r) { throw new \RuntimeException('Inscrição não encontrada.'); } return $r;
     }
-    public static function byCPF(int $eventId, string $cpf): ?array
+    public static function byCPF(int $eventId, string $cpf, ?string $scope = null): ?array
     {
-        global $wpdb; return $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . self::table('registrations') . ' WHERE event_id=%d AND scope=%s AND cpf_hash=%s', $eventId, (new Gateway())->scope(), Security::hash('cpf:' . $cpf)), ARRAY_A) ?: null;
+        global $wpdb; return $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . self::table('registrations') . ' WHERE event_id=%d AND scope=%s AND cpf_hash=%s', $eventId, $scope ?? (new Gateway())->scope(), Security::hash('cpf:' . $cpf)), ARRAY_A) ?: null;
     }
     public static function payment(int $id): array
     {
@@ -173,14 +197,29 @@ final class Store
         if ($rows === null || !empty($wpdb->last_error)) { throw new \RuntimeException('Não foi possível conferir as tentativas de pagamento. Tente novamente.'); }
         return $rows;
     }
+    public static function transactions(int $paymentId): array
+    {
+        global $wpdb; $rows = $wpdb->get_results($wpdb->prepare('SELECT * FROM ' . self::table('transactions') . ' WHERE payment_id=%d ORDER BY id ASC', $paymentId), ARRAY_A);
+        if ($rows === null || !empty($wpdb->last_error)) { throw new \RuntimeException('Não foi possível conferir as transações.'); }
+        return $rows;
+    }
+    public static function audit(int $registrationId, string $action, string $note, int $paymentId = 0): void
+    {
+        self::insert('audit', ['registration_id' => $registrationId, 'payment_id' => $paymentId, 'actor_id' => get_current_user_id(), 'action' => $action, 'note' => Domain::cut(sanitize_textarea_field($note), 1000), 'created_at' => current_time('mysql', true)]);
+    }
+    public static function auditRows(int $registrationId): array
+    {
+        global $wpdb; return $wpdb->get_results($wpdb->prepare('SELECT * FROM ' . self::table('audit') . ' WHERE registration_id=%d ORDER BY id DESC LIMIT 50', $registrationId), ARRAY_A) ?: [];
+    }
     public static function publicRegistration(array $r): array
     {
         $e = self::event((int) $r['event_id']); $today = Domain::today($e);
         $b = self::balance($r);
-        $payments = array_map(static function ($p) {
-            return ['id' => (int) $p['id'], 'amount' => (int) $p['amount'], 'credit' => (int) $p['credit'], 'method' => $p['method'], 'state' => $p['state'], 'created_at' => $p['created_at'], 'url' => $p['state'] === 'pending' ? $p['checkout_url'] : '', 'error' => $p['state'] === 'review' ? 'Pagamento em conferência. Procure a organização antes de tentar novamente.' : ''];
+        $active = ($r['status'] ?? 'active') === 'active';
+        $payments = array_map(static function ($p) use ($active) {
+            return ['id' => (int) $p['id'], 'amount' => (int) $p['amount'], 'credit' => (int) $p['credit'], 'method' => $p['method'], 'state' => $p['state'], 'created_at' => $p['created_at'], 'url' => $active && $p['state'] === 'pending' ? $p['checkout_url'] : '', 'error' => $p['state'] === 'review' ? 'Pagamento em conferência. Procure a organização antes de tentar novamente.' : ''];
         }, self::payments((int) $r['id']));
-        return array_merge($b, ['id' => (int) $r['id'], 'event_id' => (int) $r['event_id'], 'event_name' => $e['name'], 'name' => Domain::firstName($r['name']), 'lot' => $r['lot_name'], 'method' => $r['method'], 'max_installments' => (int) $r['max_installments'], 'deadline' => $e['payment_deadline'], 'message' => str_replace('{data}', Domain::dateBR($e['payment_deadline']), $e['payment_message']), 'payments' => $payments, 'can_pay' => $b['balance'] > 0 && $e['status'] === 'published' && $today <= $e['payment_deadline'] && ($r['method'] === 'Pix' ? (bool) $e['allow_pix'] : (bool) $e['allow_card'])]);
+        return array_merge($b, ['id' => (int) $r['id'], 'event_id' => (int) $r['event_id'], 'event_name' => $e['name'], 'name' => Domain::firstName($r['name']), 'lot' => $r['lot_name'], 'method' => $r['method'], 'max_installments' => (int) $r['max_installments'], 'deadline' => $e['payment_deadline'], 'message' => str_replace('{data}', Domain::dateBR($e['payment_deadline']), $e['payment_message']), 'registration_status' => $r['status'] ?? 'active', 'payments' => $payments, 'can_pay' => $active && $b['balance'] > 0 && $e['status'] === 'published' && $today <= $e['payment_deadline'] && ($r['method'] === 'Pix' ? (bool) $e['allow_pix'] : (bool) $e['allow_card'])]);
     }
     public static function sample(): array
     {

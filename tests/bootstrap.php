@@ -2,7 +2,7 @@
 /** Isolated WordPress / gateway doubles. No real payments or emails are sent. */
 define('ABSPATH', __DIR__ . '/');
 define('ARRAY_A', 'ARRAY_A');
-define('IE_VERSION', '1.0.3');
+define('IE_VERSION', '1.1.0');
 define('DAY_IN_SECONDS', 86400); define('HOUR_IN_SECONDS', 3600);
 $GLOBALS['test_options'] = []; $GLOBALS['test_transients'] = []; $GLOBALS['http_queue'] = []; $GLOBALS['http_calls'] = [];
 function wp_salt($scheme) { return 'local-test-salt-never-a-production-secret'; }
@@ -74,13 +74,16 @@ final class TestDB
         if ($table === 'wp_ie_registrations') foreach ($this->rows[$table] ?? [] as $r) if ($r['event_id'] === $data['event_id'] && $r['scope'] === $data['scope'] && $r['cpf_hash'] === $data['cpf_hash']) return false;
         $id = ($this->seq[$table] ?? 0) + 1; $this->seq[$table] = $id; $this->insert_id = $id;
         $data = array_merge(['id' => $id], $data);
-        if ($table === 'wp_ie_payments') $data = array_merge(['checkout_id' => null, 'synced_at' => null, 'created_at' => current_time('mysql', true), 'remote_id_hint' => '', 'webhook_at' => null, 'webhook_error' => ''], $data);
+        if ($table === 'wp_ie_registrations') $data = array_merge(['status' => 'active', 'admin_note' => '', 'updated_at' => null, 'deleted_at' => null], $data);
+        if ($table === 'wp_ie_payments') $data = array_merge(['checkout_id' => null, 'synced_at' => null, 'created_at' => current_time('mysql', true), 'remote_id_hint' => '', 'webhook_at' => null, 'webhook_error' => '', 'cpf_snapshot' => null, 'diagnostic_json' => null], $data);
+        if ($table === 'wp_ie_transactions') $data = array_merge(['cancel_status' => '', 'cancel_operation' => '', 'cancel_requested_at' => null, 'cancel_error' => '', 'cancel_actor' => 0], $data);
         $this->rows[$table][$id] = $data; return 1;
     }
     public function update($table, $data, $where) {
         if ($this->failUpdate === $table && ($this->failUpdateField === null || array_key_exists($this->failUpdateField, $data))) { $this->failUpdate = null; $this->failUpdateField = null; return false; }
         $n = 0; foreach ($this->rows[$table] ?? [] as $id => $r) if ($this->matches($r, $where)) { $this->rows[$table][$id] = array_merge($r, $data); $n++; } return $n;
     }
+    public function hydrate(array $rows): void { $this->rows = $rows; $this->seq = []; foreach ($rows as $table => $items) { $this->seq[$table] = $items ? max(array_keys($items)) : 0; } }
     public function delete($table, $where) { $n = 0; foreach ($this->rows[$table] ?? [] as $id => $r) if ($this->matches($r, $where)) { unset($this->rows[$table][$id]); $n++; } return $n; }
     private function matches($row, $where) { foreach ($where as $key => $value) if ((string) ($row[$key] ?? '') !== (string) $value) return false; return true; }
     private function where($sql) {

@@ -98,6 +98,13 @@ function makeAccount(method = 'Pix', paid = 10000) {
   await page.locator('[data-form="pay"] input').fill('100'); await page.locator('[data-form="pay"] button').click();
   await page.waitForFunction(() => document.querySelector('.ie-alert')?.textContent.includes('conferência'));
   assert.equal(await page.locator('[data-form="pay"]').count(), 0); assert(await page.locator('[data-action="refresh"]').isEnabled());
+  // Cancellation waits for K8 and hides payment actions even if the existing credit covers the total.
+  account = makeAccount('Pix', 49000); account.payments[0].state = 'canceling'; await page.goto(base); await page.locator('.ie-account').waitFor();
+  assert.equal(await page.locator('.ie-success').count(), 0); assert.equal(await page.locator('[data-form="pay"]').count(), 0); assert.match(await page.locator('.ie-account').textContent(), /Cancelamento \/ estorno/);
+  for (const registration_status of ['cancelled', 'deleted']) {
+    account = makeAccount(); account.registration_status = registration_status; account.payments.unshift({ id: 9, amount: 5000, state: 'pending', method: 'Pix', created_at: '2026-10-20 12:00:00', url: 'https://sandbox.meuk8.com.br/PagamentosUI/checkout?id=test-only' });
+    await page.goto(base); await page.locator('.ie-account').waitFor(); assert.equal(await page.locator('[data-form="pay"]').count(), 0); assert.equal(await page.locator('.ie-account a[href*="meuk8"]').count(), 0); assert.match(await page.locator('.ie-account').textContent(), registration_status === 'deleted' ? /Inscrição excluída/ : /Inscrição cancelada/);
+  }
   // Unknown dates keep registrations closed while the CPF consultation remains available.
   account = null; quote = { ...event, active_lot: null, open: false, event_date: '', notice: 'Prévia: defina a data do evento.' };
   await page.goto(base); await page.locator('.ie-notice').waitFor(); assert.equal(await page.locator('[data-form="register"]').count(), 0);

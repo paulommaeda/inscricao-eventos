@@ -19,6 +19,10 @@ final class Admin
         add_action('admin_post_ie_test_k8', [self::class, 'testK8']);
         add_action('admin_post_ie_sync_payment', [self::class, 'syncPayment']);
         add_action('admin_post_ie_recover_payment', [self::class, 'recoverPayment']);
+        add_action('admin_post_ie_save_registration', [self::class, 'saveRegistration']);
+        add_action('admin_post_ie_registration_action', [self::class, 'registrationAction']);
+        add_action('admin_post_ie_cancel_payment', [self::class, 'cancelPayment']);
+        add_action('admin_post_ie_review_cancellation', [self::class, 'reviewCancellation']);
         add_action('admin_post_ie_export', [self::class, 'export']);
         add_action('admin_enqueue_scripts', static function ($hook) {
             if (strpos($hook, 'ie-') === false) { return; }
@@ -34,6 +38,7 @@ final class Admin
     private static function guard(string $action): void
     {
         if (!current_user_can('manage_options')) { wp_die('Acesso negado.'); }
+        if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') { wp_die('Esta ação exige envio pelo formulário.'); }
         check_admin_referer($action);
     }
     private static function notice(): void
@@ -157,7 +162,7 @@ final class Admin
     {
         $s = (array) get_option('ie_settings', []);
         echo '<div class="wrap ie-admin"><h1>Configurações K8</h1>'; self::notice();
-        echo '<div class="ie-panel"><p>Use as credenciais da <strong>API K8 Pay (PagamentosAPI)</strong>. O checkout hospedado recebe os dados do cartão e oferece o parcelamento do lote.</p>';
+        echo '<div class="ie-panel"><h2>Integração: K8 Pay / Pagamentos</h2><p>Use as credenciais da <strong>API K8 Pay (PagamentosAPI)</strong>. O checkout hospedado recebe os dados do cartão e oferece o parcelamento do lote.</p><p>API deste plugin: <code>' . esc_html(($s['environment'] ?? 'sandbox') === 'production' ? 'https://pagamentos.meuk8.com.br/PagamentosAPI' : 'https://sandbox.meuk8.com.br/PagamentosAPI') . '</code></p>';
         echo '<p><strong>Ambiente atual: ' . (($s['environment'] ?? 'sandbox') === 'production' ? 'Produção' : 'Sandbox (testes)') . '.</strong> Se você gerou as chaves no painel de produção, selecione Produção abaixo. Credenciais do K8 Cobranças e do K8 Pagamentos devem ser conferidas no respectivo painel.</p>';
         self::form('ie_save_settings'); echo '<div class="ie-form-grid"><label class="ie-field"><span>Ambiente</span><select name="environment"><option value="sandbox" ' . selected($s['environment'] ?? 'sandbox', 'sandbox', false) . '>Testes (sandbox)</option><option value="production" ' . selected($s['environment'] ?? '', 'production', false) . '>Produção</option></select></label>';
         foreach (['client_id' => 'Client ID', 'client_secret' => 'Client Secret', 'aes_key' => 'Chave AES (16 caracteres)'] as $key => $label) { self::input($key, $label, '', 'password', 'autocomplete="new-password"'); }
@@ -187,13 +192,14 @@ final class Admin
     }
     private static function filters(): array
     {
-        return ['event' => absint($_GET['event'] ?? $_POST['event'] ?? 0), 'status' => sanitize_key(wp_unslash($_GET['status'] ?? $_POST['status'] ?? '')), 'q' => Domain::cut(sanitize_text_field(wp_unslash($_GET['q'] ?? $_POST['q'] ?? '')), 200), 'method' => sanitize_text_field(wp_unslash($_GET['method'] ?? $_POST['method'] ?? '')), 'all_scopes' => absint($_GET['all_scopes'] ?? $_POST['all_scopes'] ?? 0)];
+        return ['event' => absint($_GET['event'] ?? $_POST['event'] ?? 0), 'status' => sanitize_key(wp_unslash($_GET['status'] ?? $_POST['status'] ?? '')), 'q' => Domain::cut(sanitize_text_field(wp_unslash($_GET['q'] ?? $_POST['q'] ?? '')), 200), 'method' => sanitize_text_field(wp_unslash($_GET['method'] ?? $_POST['method'] ?? '')), 'all_scopes' => absint($_GET['all_scopes'] ?? $_POST['all_scopes'] ?? 0), 'registration_status' => sanitize_key(wp_unslash($_GET['registration_status'] ?? $_POST['registration_status'] ?? 'active'))];
     }
     private static function query(array $f): array
     {
         global $wpdb;
         $r = Store::table('registrations'); $p = Store::table('payments'); $t = Store::table('transactions'); $e = Store::table('events');
         $where = ['1=1']; $args = [];
+        if (in_array($f['registration_status'] ?? 'active', ['active', 'cancelled', 'deleted'], true)) { $where[] = 'r.status=%s'; $args[] = $f['registration_status'] ?? 'active'; }
         if (!$f['all_scopes']) {
             try { $scope = (new Gateway())->scope(); } catch (\Throwable $error) { $scope = ''; }
             $where[] = 'r.scope=%s'; $args[] = $scope;
@@ -217,6 +223,7 @@ final class Admin
     public static function dashboard(): void
     {
         echo '<div class="wrap ie-admin"><h1>Acompanhamento de inscrições</h1>'; self::notice();
+        if (!empty($_GET['edit_registration'])) { self::editRegistration(absint($_GET['edit_registration'])); echo '</div>'; return; }
         if (!empty($_GET['view'])) { self::detail(absint($_GET['view'])); echo '</div>'; return; }
         global $wpdb; $f = self::filters(); [$from, $args] = self::query($f);
         $sql = 'SELECT COUNT(*) count,COALESCE(SUM(r.total),0) total,COALESCE(SUM(COALESCE(b.paid,0)),0) paid,COALESCE(SUM(GREATEST(r.total-COALESCE(b.paid,0),0)),0) balance,COALESCE(SUM(GREATEST(COALESCE(b.paid,0)-r.total,0)),0) overpaid ' . $from;
@@ -228,6 +235,8 @@ final class Admin
         foreach (['' => 'Todos os saldos', 'pending' => 'Sem pagamento', 'partial' => 'Pagamento parcial', 'paid' => 'Quitadas', 'overpaid' => 'Pagamento excedente'] as $v => $label) { echo '<option value="' . esc_attr($v) . '" ' . selected($f['status'], $v, false) . '>' . esc_html($label) . '</option>'; }
         echo '</select><select name="method">';
         foreach (['' => 'Todos os meios', 'Pix' => 'PIX', 'Cartao' => 'Cartão'] as $v => $label) { echo '<option value="' . esc_attr($v) . '" ' . selected($f['method'], $v, false) . '>' . esc_html($label) . '</option>'; }
+        echo '</select><select name="registration_status">';
+        foreach (['active' => 'Inscrições ativas', 'cancelled' => 'Inscrições canceladas', 'deleted' => 'Lixeira', 'all' => 'Todas as inscrições'] as $v => $label) { echo '<option value="' . esc_attr($v) . '" ' . selected($f['registration_status'], $v, false) . '>' . esc_html($label) . '</option>'; }
         echo '</select><input name="q" placeholder="Nome, e-mail ou CPF completo" value="' . esc_attr($f['q']) . '"><label><input type="checkbox" name="all_scopes" value="1" ' . checked($f['all_scopes'], 1, false) . '> Incluir outras contas / ambientes</label><button class="button">Filtrar</button></form>';
         echo '<p>O filtro padrão usa a conta e o ambiente K8 configurados atualmente. “Confirmado” inclui cartão aprovado, mesmo quando o banco ainda liquidará parcelas.</p>';
         $page = max(1, absint($_GET['paged'] ?? 1)); $size = 25; $rows = self::rows($f, $size, ($page - 1) * $size);
@@ -236,7 +245,9 @@ final class Admin
             $b = Domain::balance((int) $row['total'], (int) $row['paid']);
             echo '<tr><td>#' . (int) $row['id'] . '</td><td><strong>' . esc_html($row['name']) . '</strong><br>' . esc_html($row['email']) . '</td><td>' . esc_html($row['event_name']) . '<br>' . esc_html($row['lot_name']) . '</td><td>' . ($row['method'] === 'Pix' ? 'PIX' : 'Cartão') . '</td>';
             foreach (['total', 'paid', 'balance'] as $key) { echo '<td>' . esc_html(Domain::money($b[$key])) . '</td>'; }
-            echo '<td>' . esc_html($b['overpaid'] ? 'Excedente' : ['pending' => 'Sem pagamento', 'partial' => 'Parcial', 'paid' => 'Quitada'][$b['status']]) . '</td><td><a class="button" href="' . esc_url(admin_url('admin.php?page=ie-dashboard&view=' . $row['id'])) . '">Detalhes</a></td></tr>';
+            echo '<td>' . esc_html($b['overpaid'] ? 'Excedente' : ['pending' => 'Sem pagamento', 'partial' => 'Parcial', 'paid' => 'Quitada'][$b['status']]) . '<br><small>' . esc_html(['active' => 'Ativa', 'cancelled' => 'Cancelada', 'deleted' => 'Na lixeira'][$row['status'] ?? 'active'] ?? '') . '</small></td><td><div class="ie-row-actions"><a class="button" href="' . esc_url(admin_url('admin.php?page=ie-dashboard&view=' . $row['id'])) . '">Detalhes / ações</a>';
+            if (($row['status'] ?? 'active') !== 'deleted') { echo '<a class="button" href="' . esc_url(admin_url('admin.php?page=ie-dashboard&edit_registration=' . $row['id'])) . '">Editar</a>'; }
+            echo '</div></td></tr>';
         }
         if (!$rows) { echo '<tr><td colspan="9">Nenhuma inscrição para estes filtros.</td></tr>'; }
         echo '</tbody></table></div><div class="ie-pagination">';
@@ -252,18 +263,20 @@ final class Admin
     {
         try {
             $r = Store::registration($id); $b = Store::balance($r); $event = Store::event((int) $r['event_id']);
+            self::registrationButtons($r);
             echo '<p><a href="' . esc_url(admin_url('admin.php?page=ie-dashboard')) . '">← Inscrições</a></p><div class="ie-panel"><h2>' . esc_html($r['name']) . ' — #' . $id . '</h2><div class="ie-form-grid">';
             foreach (['CPF' => Security::unseal($r['cpf_encrypted']), 'E-mail' => $r['email'], 'Telefone' => $r['phone'], 'Evento' => $event['name'], 'Lote' => $r['lot_name'], 'Conta / ambiente (referência)' => substr($r['scope'], 0, 12), 'Forma' => $r['method'] === 'Pix' ? 'PIX' : 'Cartão até ' . $r['max_installments'] . 'x', 'Total' => Domain::money($b['total']), 'Confirmado' => Domain::money($b['paid']), 'Saldo' => Domain::money($b['balance']), 'Excedente' => Domain::money($b['overpaid']), 'Aceite (UTC)' => $r['terms_accepted_at']] as $label => $value) { echo '<div><b>' . esc_html($label) . '</b><p>' . esc_html($value) . '</p></div>'; }
             echo '</div><details><summary>Condições aceitas</summary><div>' . wp_kses_post(nl2br($r['terms_snapshot'])) . '</div></details></div><h2>Histórico de pagamentos</h2>';
             foreach (Store::payments($id) as $p) {
-                echo '<div class="ie-panel"><h3>Tentativa #' . (int) $p['id'] . ' — ' . esc_html(Domain::money((int) $p['amount'])) . '</h3><p>Estado: <strong>' . esc_html($p['state']) . '</strong> · Crédito: ' . esc_html(Domain::money((int) $p['credit'])) . '</p><p>Referência: <code>' . esc_html($p['reference']) . '</code><br>Checkout K8: <code>' . esc_html($p['checkout_id'] ?? 'Não retornado') . '</code><br>Conferido em (UTC): ' . esc_html($p['synced_at'] ?? 'Ainda não conferido') . '</p>';
+                echo '<div class="ie-panel"><h3>Tentativa #' . (int) $p['id'] . ' — ' . esc_html(Domain::money((int) $p['amount'])) . '</h3><p>Estado: <strong>' . esc_html(['pending' => 'Aguardando pagamento/retorno', 'creating' => 'Criando checkout', 'review' => 'Em conferência', 'paid' => 'Confirmado', 'closed' => 'Encerrado', 'canceling' => 'Cancelamento / estorno em conferência'][$p['state']] ?? $p['state']) . '</strong> · Crédito: ' . esc_html(Domain::money((int) $p['credit'])) . '</p><p>Referência: <code>' . esc_html($p['reference']) . '</code><br>Checkout K8: <code>' . esc_html($p['checkout_id'] ?? 'Não retornado') . '</code><br>Conferido em (UTC): ' . esc_html($p['synced_at'] ?? 'Ainda não conferido') . '</p>';
                 if ($p['last_error']) { echo '<p class="ie-error">' . esc_html($p['last_error']) . '</p>'; }
                 echo '<p>Último retorno K8 (UTC): ' . esc_html($p['webhook_at'] ?? 'Ainda não recebido') . '<br>Identificador para conciliação: <code>' . esc_html($p['remote_id_hint'] ?? '') . '</code></p>';
                 if (!empty($p['webhook_error'])) { echo '<p class="ie-error">Falha no retorno: ' . esc_html($p['webhook_error']) . '</p>'; }
                 if ($p['operator_note']) { echo '<p>' . esc_html($p['operator_note']) . '</p>'; }
                 self::form('ie_sync_payment', ['payment_id' => $p['id'], 'registration_id' => $id]);
                 self::input('remote_id', 'ID da transação K8 (opcional; vazio usa o ID conhecido ou a referência)', '', 'text', 'pattern="[A-Za-z0-9-]{1,100}"');
-                echo '<p><button class="button">Consultar e conciliar no K8</button></p></form><p>Uma tentativa em conferência não gera outra cobrança automaticamente. Localize a referência no K8 e informe o ID da transação acima.</p></div>';
+                echo '<p><button class="button">Consultar e conciliar no K8</button></p></form><p>Uma tentativa em conferência não gera outra cobrança automaticamente. Localize a referência no K8 e informe o ID da transação acima.</p>';
+                self::diagnostic($p); self::cancelForm($p, $r); echo '</div>';
                 if (in_array($p['state'], ['review', 'creating', 'pending'], true)) {
                     echo '<details class="ie-panel"><summary>Recuperar tentativa após conferir no K8</summary><p>Para continuar um checkout já criado, copie seu identificador e sua URL. Para liberar uma nova tentativa, primeiro confirme no K8 que não há checkout ativo nem pagamento; desative qualquer link antigo. Pagamentos posteriores de tentativas antigas continuam sendo conciliados.</p>';
                     self::form('ie_recover_payment', ['payment_id' => $p['id'], 'registration_id' => $id]);
@@ -274,13 +287,101 @@ final class Admin
                     echo '<p><button class="button ie-confirm" name="mode" value="close" data-confirm="A conferência no K8 foi concluída e os links antigos foram desativados?">Liberar nova tentativa</button></p></form></details>';
                 }
             }
+            $audit = Store::auditRows($id);
+            if ($audit) { echo '<details class="ie-panel"><summary>Histórico administrativo</summary><div class="ie-table-wrap"><table class="widefat"><thead><tr><th>Data UTC</th><th>Usuário WP</th><th>Ação</th><th>Registro</th></tr></thead><tbody>'; foreach ($audit as $a) { echo '<tr><td>' . esc_html($a['created_at']) . '</td><td>#' . (int) $a['actor_id'] . '</td><td>' . esc_html($a['action']) . '</td><td class="ie-wrap-cell">' . esc_html($a['note']) . '</td></tr>'; } echo '</tbody></table></div></details>'; }
         } catch (\Throwable $e) { echo '<p>' . esc_html($e->getMessage()) . '</p>'; }
+    }
+    private static function registrationButtons(array $r): void
+    {
+        $id = (int) $r['id']; $deleted = ($r['status'] ?? 'active') === 'deleted';
+        echo '<div class="ie-registration-actions"><span class="ie-badge">' . esc_html(['active' => 'Ativa', 'cancelled' => 'Cancelada', 'deleted' => 'Na lixeira'][$r['status'] ?? 'active'] ?? '') . '</span>';
+        if (!$deleted) { echo '<a class="button button-primary" href="' . esc_url(admin_url('admin.php?page=ie-dashboard&edit_registration=' . $id)) . '">Editar inscrição</a>'; }
+        self::form('ie_registration_action', ['registration_id' => $id, 'mode' => $deleted ? 'restore' : 'trash']);
+        echo '<button class="button ' . ($deleted ? '' : 'ie-confirm') . '" data-confirm="Mover esta inscrição para a lixeira e bloquear novos pagamentos? O histórico será preservado.">' . ($deleted ? 'Restaurar inscrição' : 'Excluir inscrição') . '</button></form>';
+        if ($deleted && !Store::payments($id)) { self::form('ie_registration_action', ['registration_id' => $id, 'mode' => 'purge']); echo '<button class="button ie-confirm" data-confirm="Excluir definitivamente este cadastro sem tentativas K8?">Excluir definitivamente</button></form>'; }
+        echo '</div>';
+        if ($deleted) { echo '<p>Esta inscrição está na lixeira. Os registros K8 continuam disponíveis para conciliação, cancelamento e estorno.</p>'; }
+    }
+    private static function editRegistration(int $id): void
+    {
+        try {
+            $r = Store::registration($id); self::registrationButtons($r);
+            if (($r['status'] ?? 'active') === 'deleted') { return; }
+            echo '<div class="ie-panel"><h2>Editar inscrição #' . $id . '</h2><p>' . esc_html($r['lot_name'] . ' · ' . Domain::money((int) $r['total']) . ' · Cartão até ' . $r['max_installments'] . 'x') . '</p>';
+            self::form('ie_save_registration', ['registration_id' => $id]); echo '<div class="ie-form-grid">';
+            self::input('name', 'Nome completo', $r['name'], 'text', 'required maxlength="200"'); self::input('email', 'E-mail', $r['email'], 'email', 'required maxlength="254"'); self::input('phone', 'Telefone com DDD', $r['phone'], 'tel', 'required'); self::input('cpf', 'CPF', Security::unseal($r['cpf_encrypted']), 'text', 'required');
+            echo '<label class="ie-field"><span>Forma de futuros pagamentos</span><select name="method">'; foreach (['Pix' => 'PIX', 'Cartao' => 'Cartão'] as $value => $label) { echo '<option value="' . esc_attr($value) . '" ' . selected($r['method'], $value, false) . '>' . esc_html($label) . '</option>'; } echo '</select></label><label class="ie-field"><span>Situação da inscrição</span><select name="status">'; foreach (['active' => 'Ativa', 'cancelled' => 'Cancelada — bloquear novos pagamentos'] as $value => $label) { echo '<option value="' . esc_attr($value) . '" ' . selected($r['status'] ?? 'active', $value, false) . '>' . esc_html($label) . '</option>'; } echo '</select></label>';
+            self::textarea('admin_note', 'Observações da organização', $r['admin_note'] ?? ''); echo '</div><p>O lote, o valor e as parcelas contratados ficam preservados. Pagamentos já emitidos conservam o CPF original; novos pagamentos usam o cadastro corrigido.</p><p><button class="button button-primary">Salvar inscrição</button> <a class="button" href="' . esc_url(admin_url('admin.php?page=ie-dashboard&view=' . $id)) . '">Voltar aos detalhes</a></p></form></div>';
+        } catch (\Throwable $e) { echo '<p class="ie-error">' . esc_html($e->getMessage()) . '</p>'; }
+    }
+    private static function diagnostic(array $p): void
+    {
+        $d = json_decode($p['diagnostic_json'] ?? '', true);
+        if (!is_array($d) || empty($d['rows'])) { return; }
+        echo '<details class="ie-diagnostic"><summary>Diagnóstico da última consulta K8</summary><p>Conferido em UTC: ' . esc_html($d['checked_at']) . '. O CPF está mascarado.</p><div class="ie-table-wrap"><table class="widefat"><thead><tr><th>Campo</th><th>Na cobrança local</th><th>Devolvido pelo K8</th><th>Conferência</th></tr></thead><tbody>';
+        foreach ($d['rows'] as $row) { echo '<tr><td>' . esc_html($row['field']) . '</td><td class="ie-wrap-cell">' . esc_html($row['local']) . '</td><td class="ie-wrap-cell">' . esc_html($row['k8']) . '</td><td class="' . ($row['result'] === 'Divergente' ? 'ie-error' : '') . '">' . esc_html($row['result']) . '</td></tr>'; }
+        echo '</tbody></table></div></details>';
+    }
+    private static function cancelForm(array $p, array $r): void
+    {
+        $transactions = Store::transactions((int) $p['id']);
+        if ($transactions) {
+            echo '<h4>Transações K8 identificadas</h4><div class="ie-table-wrap"><table class="widefat"><thead><tr><th>ID da transação</th><th>Estado K8</th><th>Crédito</th><th>Cancelamento</th></tr></thead><tbody>';
+            foreach ($transactions as $tx) {
+                echo '<tr><td class="ie-wrap-cell"><code>' . esc_html($tx['remote_id']) . '</code></td><td>' . esc_html($tx['remote_state']) . '</td><td>' . esc_html(Domain::money((int) $tx['credit'])) . '</td><td>' . esc_html(['' => 'Sem solicitação', 'sending' => 'Envio em conferência', 'requested' => 'Solicitado; aguardar K8', 'review' => 'Conferir no K8', 'confirmed' => 'Confirmado', 'failed' => 'Recusado ou liberado após conferência'][$tx['cancel_status'] ?? ''] ?? '') . '</td></tr>';
+                if (!empty($tx['cancel_error'])) { echo '<tr><td colspan="4" class="ie-error ie-wrap-cell">' . esc_html($tx['cancel_error']) . '</td></tr>'; }
+                if (in_array($tx['cancel_status'] ?? '', ['sending', 'requested', 'review'], true)) {
+                    echo '<tr><td colspan="4"><details><summary>Conferir solicitação pendente</summary><p>Consulte o K8. Libere somente após confirmar que não há cancelamento/estorno em andamento.</p>'; self::form('ie_review_cancellation', ['registration_id' => $r['id'], 'payment_id' => $p['id'], 'remote_id' => $tx['remote_id']]); self::input('reason', 'Registro da conferência', '', 'text', 'required minlength="3"'); self::check('confirmed', 'Conferi no K8 que não há solicitação de cancelamento/estorno em andamento.', false); echo '<p><button class="button ie-confirm" data-confirm="Registrar a conferência e liberar uma nova solicitação para esta transação?">Registrar conferência</button></p></form></details></td></tr>';
+                }
+            }
+            echo '</tbody></table></div>';
+        }
+        $remote = (string) ($p['remote_id_hint'] ?? ''); if (!$remote && count($transactions) === 1) { $remote = $transactions[0]['remote_id']; }
+        echo '<details class="ie-cancel-panel"><summary>Cancelar transação / estornar pagamento no K8</summary><p>Informe o ID da transação desejada. O K8 decide se o estado atual permite a operação. Um PIX já pago exige estorno. O estorno solicita a devolução integral desta transação; o saldo muda após confirmação.</p>';
+        self::form('ie_cancel_payment', ['registration_id' => $r['id'], 'payment_id' => $p['id']]); echo '<div class="ie-form-grid">'; self::input('remote_id', 'ID da transação K8', $remote, 'text', 'required pattern="[A-Za-z0-9-]{1,100}"');
+        echo '<label class="ie-field"><span>Operação no K8</span><select name="operation"><option value="cancel">Cancelar transação</option><option value="refund">Estornar pagamento aprovado (PIX ou cartão)</option></select></label>'; self::input('reason', 'Motivo', '', 'text', 'required minlength="3" maxlength="1000"'); echo '</div>'; self::check('confirmed', 'Confirmo a solicitação no K8 e, se houver pagamento, a devolução integral dessa transação.', false);
+        echo '<p><button class="button ie-confirm" data-confirm="Enviar esta solicitação de cancelamento/estorno ao K8? A operação pode devolver o valor pago.">Enviar solicitação ao K8</button></p></form></details>';
+    }
+    public static function saveRegistration(): void
+    {
+        self::guard('ie_save_registration'); $id = absint($_POST['registration_id'] ?? 0);
+        try { Registrations::save($id, (array) wp_unslash($_POST)); self::redirect('ie-dashboard', 'Inscrição atualizada. Histórico de pagamentos preservado.', false, ['view' => $id]); }
+        catch (\Throwable $e) { self::redirect('ie-dashboard', $e->getMessage(), true, ['edit_registration' => $id]); }
+    }
+    public static function registrationAction(): void
+    {
+        self::guard('ie_registration_action'); $id = absint($_POST['registration_id'] ?? 0); $mode = $_POST['mode'] ?? '';
+        try {
+            if ($mode === 'trash') { Registrations::trash($id); }
+            elseif ($mode === 'restore') { Registrations::restore($id); }
+            elseif ($mode === 'purge') { Registrations::purge($id); }
+            else { throw new \RuntimeException('Ação inválida.'); }
+            self::redirect('ie-dashboard', $mode === 'restore' ? 'Inscrição restaurada.' : ($mode === 'purge' ? 'Cadastro excluído definitivamente.' : 'Inscrição movida para a lixeira. Histórico K8 preservado.'), false, $mode === 'purge' ? [] : ['view' => $id]);
+        } catch (\Throwable $e) { self::redirect('ie-dashboard', $e->getMessage(), true, ['view' => $id]); }
+    }
+    public static function cancelPayment(): void
+    {
+        self::guard('ie_cancel_payment'); $id = absint($_POST['registration_id'] ?? 0);
+        try { $p = self::postedPayment(); $message = Payments::cancel((int) $p['id'], trim((string) wp_unslash($_POST['remote_id'] ?? '')), (string) ($_POST['operation'] ?? ''), (string) wp_unslash($_POST['reason'] ?? ''), !empty($_POST['confirmed'])); self::redirect('ie-dashboard', $message, false, ['view' => $id]); }
+        catch (\Throwable $e) { self::redirect('ie-dashboard', $e->getMessage(), true, ['view' => $id]); }
+    }
+    public static function reviewCancellation(): void
+    {
+        self::guard('ie_review_cancellation'); $id = absint($_POST['registration_id'] ?? 0);
+        try { $p = self::postedPayment(); Payments::reviewCancellation((int) $p['id'], (string) wp_unslash($_POST['remote_id'] ?? ''), (string) wp_unslash($_POST['reason'] ?? ''), !empty($_POST['confirmed'])); self::redirect('ie-dashboard', 'Conferência registrada. Consulte o estado financeiro atualizado.', false, ['view' => $id]); }
+        catch (\Throwable $e) { self::redirect('ie-dashboard', $e->getMessage(), true, ['view' => $id]); }
     }
     public static function syncPayment(): void
     {
         self::guard('ie_sync_payment'); $id = absint($_POST['registration_id'] ?? 0);
-        try { $remote = trim((string) wp_unslash($_POST['remote_id'] ?? '')); Payments::sync(absint($_POST['payment_id'] ?? 0), $remote ?: null); self::redirect('ie-dashboard', 'Pagamento conciliado com a API K8.', false, ['view' => $id]); }
+        try { $p = self::postedPayment(); $remote = trim((string) wp_unslash($_POST['remote_id'] ?? '')); Payments::sync((int) $p['id'], $remote ?: null); self::redirect('ie-dashboard', 'Pagamento conciliado com a API K8.', false, ['view' => $id]); }
         catch (\Throwable $e) { self::redirect('ie-dashboard', $e->getMessage(), true, ['view' => $id]); }
+    }
+    private static function postedPayment(): array
+    {
+        $p = Store::payment(absint($_POST['payment_id'] ?? 0));
+        if ((int) $p['registration_id'] !== absint($_POST['registration_id'] ?? 0)) { throw new \RuntimeException('A tentativa não pertence à inscrição selecionada. Atualize a página.'); }
+        return $p;
     }
     private static function csv($value): string
     {
@@ -291,8 +392,9 @@ final class Admin
         self::guard('ie_recover_payment'); $id = absint($_POST['registration_id'] ?? 0);
         try {
             $close = ($_POST['mode'] ?? '') === 'close';
+            $p = self::postedPayment();
             if ($close && empty($_POST['confirmed'])) { throw new \RuntimeException('Confirme a conferência no K8 antes de liberar a tentativa.'); }
-            Payments::recover(absint($_POST['payment_id'] ?? 0), trim((string) wp_unslash($_POST['checkout_id'] ?? '')), trim((string) wp_unslash($_POST['checkout_url'] ?? '')), $close);
+            Payments::recover((int) $p['id'], trim((string) wp_unslash($_POST['checkout_id'] ?? '')), trim((string) wp_unslash($_POST['checkout_url'] ?? '')), $close);
             self::redirect('ie-dashboard', 'Tentativa recuperada. Créditos financeiros continuam sujeitos à confirmação K8.', false, ['view' => $id]);
         } catch (\Throwable $e) { self::redirect('ie-dashboard', $e->getMessage(), true, ['view' => $id]); }
     }
@@ -301,14 +403,14 @@ final class Admin
         self::guard('ie_export'); $f = self::filters(); nocache_headers();
         header('Content-Type: text/csv; charset=utf-8'); header('Content-Disposition: attachment; filename="inscricoes-' . gmdate('Y-m-d') . '.csv"');
         $stream = fopen('php://output', 'w'); fwrite($stream, "\xEF\xBB\xBF");
-        fputcsv($stream, ['Inscrição', 'Evento', 'Lote', 'Nome', 'E-mail', 'Telefone', 'CPF', 'Forma', 'Valor', 'Confirmado', 'Saldo', 'Excedente', 'Conta/Ambiente', 'Cadastro UTC'], ';', '"', '');
+        fputcsv($stream, ['Inscrição', 'Evento', 'Lote', 'Nome', 'E-mail', 'Telefone', 'CPF', 'Forma', 'Valor', 'Confirmado', 'Saldo', 'Excedente', 'Conta/Ambiente', 'Cadastro UTC', 'Situação da inscrição'], ';', '"', '');
         $offset = 0;
         do {
             $rows = self::rows($f, 250, $offset);
             foreach ($rows as $r) {
                 $b = Domain::balance((int) $r['total'], (int) $r['paid']); $values = [$r['id'], $r['event_name'], $r['lot_name'], $r['name'], $r['email'], $r['phone'], Security::unseal($r['cpf_encrypted']), $r['method']];
                 foreach (['total', 'paid', 'balance', 'overpaid'] as $key) { $values[] = number_format($b[$key] / 100, 2, ',', ''); }
-                $values[] = substr($r['scope'], 0, 12); $values[] = $r['created_at']; fputcsv($stream, array_map([self::class, 'csv'], $values), ';', '"', '');
+                $values[] = substr($r['scope'], 0, 12); $values[] = $r['created_at']; $values[] = ['active' => 'Ativa', 'cancelled' => 'Cancelada', 'deleted' => 'Lixeira'][$r['status'] ?? 'active'] ?? ''; fputcsv($stream, array_map([self::class, 'csv'], $values), ';', '"', '');
             }
             $offset += count($rows);
         } while (count($rows) === 250);

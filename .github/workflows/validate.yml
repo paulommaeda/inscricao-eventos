@@ -16,6 +16,7 @@ jobs:
       - run: php tests/financial.php
       - run: php tests/authentication.php
       - run: php tests/webhook.php
+      - run: php tests/management.php
   browser:
     runs-on: ubuntu-latest
     steps:
@@ -23,6 +24,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: openssl
       - run: npm install
       - run: npx playwright install --with-deps chromium
       - run: npm test

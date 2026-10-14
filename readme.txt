@@ -2,7 +2,7 @@
 Contributors: paulommaeda
 Requires at least: 6.4
 Requires PHP: 8.1
-Stable tag: 1.0.3
+Stable tag: 1.1.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -13,6 +13,14 @@ Instale o ZIP, ative, configure as credenciais K8 Pay e os dados do evento no me
 Use [inscricao_eventos evento="1"] em uma página. A ativação cria o modelo do retiro como rascunho.
 
 == Changelog ==
+= 1.1.0 =
+* Edição administrativa de inscrições, situação, observações e forma de futuros pagamentos.
+* Exclusão para lixeira, restauração e exclusão definitiva de cadastros sem tentativas K8.
+* Cancelamento no K8 Pay e estorno de PIX pago pelo WordPress, com confirmação e acompanhamento pela API.
+* CPF original preservado em cada cobrança, histórico administrativo e bloqueio de solicitações duplicadas.
+* Diagnóstico comparando dados locais e devolvidos pelo K8, com CPF mascarado.
+* Migração validada do banco e testes de gestão, cancelamento e interface administrativa.
+
 = 1.0.3 =
 * GUIDs K8 com ou sem hífens e com maiúsculas/minúsculas são comparados como o mesmo ID.
 * Registros financeiros antigos com IDs compactos são reutilizados sem duplicar crédito.

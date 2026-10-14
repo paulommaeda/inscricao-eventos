@@ -16,7 +16,8 @@ final class Payments
             $lot = Domain::quote($event, Store::lots($eventId), Domain::today($event));
             if (!$lot) { throw new \RuntimeException('As inscrições não estão abertas neste momento.'); }
             if ((int) ($input['lot_id'] ?? 0) !== (int) $lot['id'] || (int) ($input['expected_price'] ?? -1) !== (int) $lot['price']) { throw new \RuntimeException('O lote ou valor mudou. Atualize a página para conferir as condições atuais.'); }
-            if (Store::byCPF($eventId, $cpf)) { throw new \RuntimeException('Este CPF já possui inscrição neste evento. Use a opção Minha inscrição.'); }
+            $existing = Store::byCPF($eventId, $cpf);
+            if ($existing) { throw new \RuntimeException(($existing['status'] ?? 'active') === 'deleted' ? 'Este CPF possui inscrição na lixeira. Solicite a restauração à organização.' : 'Este CPF já possui inscrição neste evento. Use a opção Minha inscrição.'); }
             $method = (string) ($input['method'] ?? '');
             if (!in_array($method, ['Pix', 'Cartao'], true) || ($method === 'Pix' && !$event['allow_pix']) || ($method === 'Cartao' && !$event['allow_card'])) { throw new \RuntimeException('Forma de pagamento indisponível para este evento.'); }
             $name = trim(sanitize_text_field($input['name'] ?? ''));
@@ -35,6 +36,7 @@ final class Payments
         $lock = Store::lock('registration:' . $registration['id']);
         try {
             $registration = Store::registration((int) $registration['id']);
+            if (($registration['status'] ?? 'active') !== 'active') { throw new \RuntimeException('Esta inscrição está cancelada ou na lixeira. Procure a organização.'); }
             $event = Store::event((int) $registration['event_id']);
             $gateway = new Gateway();
             if (!hash_equals($registration['scope'], $gateway->scope())) { throw new \RuntimeException('A inscrição pertence a outra conta ou ambiente K8. Procure a organização.'); }
@@ -48,7 +50,7 @@ final class Payments
             if ($balance['paid'] === 0 && $method === 'Pix' && $cents < min((int) $event['minimum_entry'], $balance['balance'])) { throw new \RuntimeException('A entrada mínima é ' . Domain::money((int) $event['minimum_entry']) . '.'); }
             if ($method === 'Cartao' && $cents !== $balance['balance']) { throw new \RuntimeException('O cartão deve pagar o saldo completo; o parcelamento será escolhido no K8.'); }
             foreach (Store::payments((int) $registration['id']) as $old) {
-                if (!in_array($old['state'], ['creating', 'pending', 'review'], true)) { continue; }
+                if (!in_array($old['state'], ['creating', 'pending', 'review', 'canceling'], true)) { continue; }
                 if ($old['state'] === 'pending' && $old['checkout_url'] && (int) $old['amount'] === $cents) { return ['payment_id' => (int) $old['id'], 'url' => Security::gatewayURL($old['checkout_url'])]; }
                 throw new \RuntimeException('Há um pagamento em andamento. Confira ou conclua essa tentativa antes de gerar outra.');
             }
@@ -56,7 +58,7 @@ final class Payments
             if (($settings['environment'] ?? 'sandbox') === 'production' && wp_parse_url(home_url('/'), PHP_URL_SCHEME) !== 'https') { throw new \RuntimeException('A organização precisa habilitar HTTPS antes de receber pagamentos.'); }
             $gateway->authenticate(); // Avoid reserving a payment with invalid credentials.
             $reference = 'IE' . bin2hex(random_bytes(9));
-            $id = Store::insert('payments', ['registration_id' => $registration['id'], 'reference' => $reference, 'scope' => $gateway->scope(), 'amount' => $cents, 'method' => $method, 'checkout_url' => '', 'state' => 'creating', 'last_error' => '', 'operator_note' => '', 'created_at' => current_time('mysql', true)]);
+            $id = Store::insert('payments', ['registration_id' => $registration['id'], 'reference' => $reference, 'scope' => $gateway->scope(), 'amount' => $cents, 'method' => $method, 'cpf_snapshot' => $registration['cpf_encrypted'], 'checkout_url' => '', 'state' => 'creating', 'last_error' => '', 'operator_note' => '', 'created_at' => current_time('mysql', true)]);
             $payment = Store::payment($id);
             $return = add_query_arg(['ie_return' => 1, 'ie_event' => $event['id']], $event['public_page_id'] ? get_permalink((int) $event['public_page_id']) : home_url('/'));
             $callback = add_query_arg('key', self::callbackKey($payment), rest_url('inscricao-eventos/v1/webhook/' . $id));
@@ -75,6 +77,118 @@ final class Payments
     }
 
     public static function callbackKey(array $p): string { return Security::hash('webhook:' . $p['id'] . ':' . $p['reference']); }
+
+    /** Cancellation is an explicit administrator action, never an automatic retry. */
+    public static function cancel(int $paymentId, string $remoteId, string $operation, string $reason, bool $confirmed = false): string
+    {
+        if (!$confirmed) { throw new \RuntimeException('Confirme o cancelamento ou estorno antes de enviar ao K8.'); }
+        if (!in_array($operation, ['cancel', 'refund'], true)) { throw new \RuntimeException('Operação de cancelamento inválida.'); }
+        $reason = Domain::cut(sanitize_textarea_field($reason), 1000);
+        if (strlen($reason) < 3) { throw new \RuntimeException('Informe o motivo do cancelamento ou estorno.'); }
+        $p = Store::payment($paymentId); $lock = Store::lock('registration:' . $p['registration_id']);
+        try {
+            $p = Store::payment($paymentId); $r = Store::registration((int) $p['registration_id']); $api = new Gateway();
+            if (!hash_equals($p['scope'], $api->scope())) { throw new \RuntimeException('Selecione a conta e o ambiente K8 desta tentativa para cancelar.'); }
+            $remoteId = Domain::remoteId($remoteId ?: (string) ($p['remote_id_hint'] ?? ''));
+            $existing = self::ledger($p, $remoteId);
+            if ($existing && in_array($existing['cancel_status'] ?? '', ['sending', 'requested', 'review', 'confirmed'], true)) { throw new \RuntimeException('Já existe cancelamento ou estorno registrado para esta transação. Consulte o K8 antes de uma nova solicitação.'); }
+            $data = $api->request('/api/ConsultaTransacao', ['Identificador' => $remoteId]);
+            self::applyVerified($p, $r, $data, $remoteId); // Full identity, CPF snapshot, method and amount are checked first.
+            $tx = self::ledger($p, $remoteId);
+            if (!$tx) { throw new \RuntimeException('Transação não conferida para cancelamento.'); }
+            $state = (string) $data['Estado'];
+            if (in_array($state, ['Cancelada', 'Estornado', 'Rejeitada'], true)) { return 'O K8 já confirmou que esta transação está encerrada.'; }
+            if (self::cancellationState($state) || in_array($tx['cancel_status'] ?? '', ['sending', 'requested', 'review'], true)) { throw new \RuntimeException('O K8 já mostra cancelamento ou estorno em andamento. Aguarde ou confira no painel K8.'); }
+            $paid = in_array($state, ['Aprovada', 'Liquidado'], true);
+            if ($operation === 'refund' && !$paid) { throw new \RuntimeException('O K8 ainda não aprovou este pagamento para estorno.'); }
+            if ($operation === 'cancel' && $p['method'] === 'Pix' && $paid) { throw new \RuntimeException('Este PIX já foi pago. Selecione Estornar pagamento aprovado para solicitar a devolução.'); }
+            $path = $operation === 'refund' && $p['method'] === 'Pix' ? '/api/EstornaTransacaoPIx' : '/api/CancelaTransacao';
+            Store::begin();
+            try {
+                Store::update('transactions', ['cancel_status' => 'sending', 'cancel_operation' => $operation, 'cancel_requested_at' => current_time('mysql', true), 'cancel_error' => '', 'cancel_actor' => get_current_user_id()], ['id' => $tx['id']]);
+                Store::update('payments', ['state' => 'canceling'], ['id' => $paymentId]);
+                Store::audit((int) $r['id'], $operation . '_sending', $reason . ' · Transação ' . $remoteId, $paymentId);
+                Store::commit();
+            } catch (\Throwable $e) { Store::rollback(); throw $e; }
+            try { $api->request($path, ['Identificador' => $remoteId]); }
+            catch (\Throwable $e) {
+                $rejected = $e instanceof GatewayRejected;
+                $message = ($rejected ? 'Solicitação recusada pelo K8. ' : 'Não foi possível confirmar o envio ao K8. Confira a transação antes de reenviar. ') . $e->getMessage();
+                Store::update('transactions', ['cancel_status' => $rejected ? 'failed' : 'review', 'cancel_error' => Domain::cut($message, 500)], ['id' => $tx['id']]);
+                if ($rejected) { self::applyVerified($p, $r, $data, $remoteId); }
+                Store::update('payments', ['last_error' => Domain::cut($message, 500)], ['id' => $paymentId]);
+                Store::audit((int) $r['id'], $operation . ($rejected ? '_failed' : '_review'), $message, $paymentId);
+                throw new \RuntimeException($message);
+            }
+            Store::update('transactions', ['cancel_status' => 'requested', 'cancel_error' => ''], ['id' => $tx['id']]);
+            Store::audit((int) $r['id'], $operation . '_requested', 'Solicitação aceita pelo K8 para a transação ' . $remoteId . '. Aguardando conferência do estado.', $paymentId);
+            try {
+                $after = $api->request('/api/ConsultaTransacao', ['Identificador' => $remoteId]);
+                self::applyVerified($p, $r, $after, $remoteId);
+                if (in_array($after['Estado'], ['Cancelada', 'Estornado', 'Rejeitada'], true)) { return 'Cancelamento/estorno confirmado pela consulta K8. Saldo atualizado.'; }
+            } catch (\Throwable $e) { Store::update('payments', ['last_error' => Domain::cut('Solicitação aceita pelo K8; a conferência será repetida. ' . $e->getMessage(), 500)], ['id' => $paymentId]); }
+            return 'Solicitação enviada ao K8. O saldo será atualizado quando o cancelamento/estorno for confirmado.';
+        } finally { Store::unlock($lock); }
+    }
+
+    /** An ambiguous request is unlocked only after explicit operator review and a fresh K8 query. */
+    public static function reviewCancellation(int $paymentId, string $remoteId, string $reason, bool $confirmed = false): void
+    {
+        if (!$confirmed || strlen(trim($reason)) < 3) { throw new \RuntimeException('Confirme a conferência no K8 e registre o motivo.'); }
+        $p = Store::payment($paymentId); $lock = Store::lock('registration:' . $p['registration_id']);
+        try {
+            $p = Store::payment($paymentId); $r = Store::registration((int) $p['registration_id']); $api = new Gateway();
+            if (!hash_equals($p['scope'], $api->scope())) { throw new \RuntimeException('Selecione a conta e o ambiente K8 desta tentativa.'); }
+            $remoteId = Domain::remoteId($remoteId); $tx = self::ledger($p, $remoteId);
+            if (!$tx || !in_array($tx['cancel_status'] ?? '', ['review', 'sending', 'requested'], true)) { throw new \RuntimeException('Não há solicitação de cancelamento pendente de conferência.'); }
+            $data = $api->request('/api/ConsultaTransacao', ['Identificador' => $remoteId]); self::applyVerified($p, $r, $data, $remoteId);
+            if (in_array($data['Estado'], ['Cancelada', 'Estornado', 'Rejeitada'], true)) { return; }
+            if (self::cancellationState($data['Estado'])) { throw new \RuntimeException('O K8 ainda informa cancelamento/estorno em processamento ou com erro. Regularize no K8 antes de liberar.'); }
+            Store::update('transactions', ['cancel_status' => 'failed', 'cancel_error' => 'Operador conferiu no K8 a inexistência de cancelamento/estorno em andamento.'], ['id' => $tx['id']]);
+            self::applyVerified($p, $r, $data, $remoteId);
+            Store::audit((int) $r['id'], 'cancel_reviewed', $reason, $paymentId);
+        } finally { Store::unlock($lock); }
+    }
+    private static function cancellationState(string $state): bool
+    {
+        return in_array($state, ['ACancelar', 'acancelarCNAB', 'EstornarPIX', 'CartaoCancelametoFuturo', 'ErroEstorno', 'FalhaCancelamento'], true);
+    }
+    private static function ledger(array $p, string $id): ?array
+    {
+        global $wpdb; $table = Store::table('transactions'); $id = Domain::remoteId($id);
+        $existing = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE scope=%s AND remote_id=%s", $p['scope'], $id), ARRAY_A);
+        if (!empty($wpdb->last_error)) { throw new \RuntimeException('Não foi possível conferir o histórico da transação.'); }
+        if (preg_match('/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/D', $id)) {
+            $aliases = $wpdb->get_results($wpdb->prepare("SELECT * FROM $table WHERE scope=%s AND REPLACE(LOWER(remote_id),'-','')=%s", $p['scope'], str_replace('-', '', $id)), ARRAY_A);
+            if ($aliases === null || !empty($wpdb->last_error)) { throw new \RuntimeException('Não foi possível conferir o histórico da transação.'); }
+            $aliases = array_values(array_filter($aliases, static fn($row) => Domain::remoteId($row['remote_id']) === $id));
+            if (count($aliases) > 1) { throw new \RuntimeException('Há dois registros com formatos diferentes do mesmo ID K8. Procure a organização para conferir o histórico.'); }
+            $existing = $aliases[0] ?? $existing;
+        }
+        if ($existing && (int) $existing['payment_id'] !== (int) $p['id']) { throw new \RuntimeException('Transação K8 já vinculada a outro pagamento.'); }
+        return $existing;
+    }
+
+    private static function diagnose(array $p, array $r, array $data, ?string $expectedId): void
+    {
+        $text = static fn($v) => is_scalar($v) ? Domain::cut(sanitize_text_field((string) $v), 100) : '[ausente/inválido]';
+        $id = static function ($v) use ($text) { try { return Domain::remoteId($text($v)); } catch (\Throwable $e) { return '[ausente/inválido]'; } };
+        $expectedCPF = Security::unseal(($p['cpf_snapshot'] ?? '') ?: $r['cpf_encrypted']);
+        $receivedCPF = is_scalar($data['ClienteCPFCNPJ'] ?? null) ? preg_replace('/\D/', '', (string) $data['ClienteCPFCNPJ']) : '';
+        $mask = static fn($v) => strlen($v) === 11 ? '***.***.***-' . substr($v, -2) : '[ausente/inválido]';
+        $rows = [];
+        $add = static function ($field, $local, $remote, $match) use (&$rows) { $rows[] = ['field' => $field, 'local' => $local, 'k8' => $remote, 'result' => $match]; };
+        $add('ID da transação', $expectedId ? $id($expectedId) : 'Consulta por referência', $id($data['Identificador'] ?? ''), $expectedId ? ($id($expectedId) === $id($data['Identificador'] ?? '') ? 'Confere' : 'Divergente') : 'Localizado pelo K8');
+        foreach (['Referencia' => 'Referência', 'NumeroPedido' => 'Número do pedido'] as $field => $label) { $v = $data[$field] ?? null; $add($label, $p['reference'], $text($v), $v === null || $v === '' ? 'Não informado' : ($v === $p['reference'] ? 'Confere' : 'Divergente')); }
+        $checkout = $data['IdentificadorCheckout'] ?? $data['CheckoutId'] ?? '';
+        $add('Checkout', $p['checkout_id'] ? $id($p['checkout_id']) : 'Não guardado', $checkout ? $id($checkout) : 'Não informado', $checkout ? (self::checkoutMatches($p, $checkout) ? 'Confere' : 'Divergente') : 'Não informado');
+        $add('CPF da cobrança original', $mask($expectedCPF), $mask($receivedCPF), $expectedCPF === $receivedCPF ? 'Confere' : 'Divergente');
+        $add('Forma', $p['method'], $text($data['Tipo'] ?? null), ($data['Tipo'] ?? '') === $p['method'] ? 'Confere' : 'Divergente');
+        try { $amount = Domain::cents($data['Valor'] ?? ''); $add('Valor da transação', Domain::money((int) $p['amount']), Domain::money($amount), $amount === (int) $p['amount'] ? 'Confere' : 'Divergente'); }
+        catch (\Throwable $e) { $add('Valor da transação', Domain::money((int) $p['amount']), '[ausente/inválido]', 'Divergente'); }
+        $add('Estado', 'Confirmação pela API', $text($data['Estado'] ?? null), 'Informativo');
+        Store::update('payments', ['diagnostic_json' => wp_json_encode(['checked_at' => current_time('mysql', true), 'rows' => $rows])], ['id' => $p['id']]);
+    }
 
     /** Administrator recovery never creates financial credit. Final credit still requires the gateway API. */
     public static function recover(int $id, string $checkout, string $url, bool $close): void
@@ -168,6 +282,7 @@ final class Payments
     public static function applyVerified(array $p, array $r, array $data, ?string $expectedId = null): void
     {
         global $wpdb;
+        self::diagnose($p, $r, $data, $expectedId);
         foreach (['Identificador', 'Referencia', 'NumeroPedido', 'IdentificadorCheckout', 'CheckoutId', 'ClienteCPFCNPJ'] as $field) {
             if (isset($data[$field]) && !is_string($data[$field]) && !is_int($data[$field])) { throw new \RuntimeException('Campo ' . $field . ' inválido na resposta K8.'); }
         }
@@ -182,21 +297,14 @@ final class Payments
         if ($reference !== '' && $reference !== $p['reference']) { $problems[] = 'referência diferente'; }
         if ($order !== '' && $order !== $p['reference']) { $problems[] = 'número do pedido diferente'; }
         if ($checkout !== '' && !empty($p['checkout_id']) && !self::checkoutMatches($p, $checkout)) { $problems[] = 'checkout diferente'; }
-        if (preg_replace('/\D/', '', (string) ($data['ClienteCPFCNPJ'] ?? '')) !== Security::unseal($r['cpf_encrypted'])) { $problems[] = 'CPF diferente ou ausente'; }
+        if (preg_replace('/\D/', '', (string) ($data['ClienteCPFCNPJ'] ?? '')) !== Security::unseal(($p['cpf_snapshot'] ?? '') ?: $r['cpf_encrypted'])) { $problems[] = 'CPF diferente ou ausente'; }
         if ($problems) { throw new \RuntimeException('A transação K8 não corresponde à inscrição: ' . implode('; ', $problems) . '.'); }
         $table = Store::table('transactions');
-        $existing = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE scope=%s AND remote_id=%s", $p['scope'], $id), ARRAY_A);
-        if (!empty($wpdb->last_error)) { throw new \RuntimeException('Não foi possível conferir o histórico da transação.'); }
-        if (preg_match('/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/D', $id)) {
-            $aliases = $wpdb->get_results($wpdb->prepare("SELECT * FROM $table WHERE scope=%s AND REPLACE(LOWER(remote_id),'-','')=%s", $p['scope'], str_replace('-', '', $id)), ARRAY_A);
-            if ($aliases === null || !empty($wpdb->last_error)) { throw new \RuntimeException('Não foi possível conferir o histórico da transação.'); }
-            $aliases = array_values(array_filter($aliases, static fn($row) => Domain::remoteId($row['remote_id']) === $id));
-            if (count($aliases) > 1) { throw new \RuntimeException('Há dois registros com formatos diferentes do mesmo ID K8. Procure a organização para conferir o histórico.'); }
-            $existing = $aliases[0] ?? $existing;
-        }
-        if ($existing && (int) $existing['payment_id'] !== (int) $p['id']) { throw new \RuntimeException('Transação K8 já vinculada a outro pagamento.'); }
+        $existing = self::ledger($p, $id);
         $credit = Domain::credit($data, (int) $p['amount'], $p['method'], (int) ($existing['credit'] ?? 0));
         $row = ['payment_id' => $p['id'], 'scope' => $p['scope'], 'remote_id' => $id, 'remote_state' => $data['Estado'], 'credit' => $credit, 'paid_at' => Domain::cut((string) ($data['DataPagamento'] ?? ''), 40), 'synced_at' => current_time('mysql', true)];
+        if (in_array($data['Estado'], ['Cancelada', 'Estornado', 'Rejeitada'], true) && in_array($existing['cancel_status'] ?? '', ['sending', 'requested', 'review'], true)) { $row['cancel_status'] = 'confirmed'; $row['cancel_error'] = ''; }
+        elseif (self::cancellationState($data['Estado'])) { $row['cancel_status'] = in_array($data['Estado'], ['ErroEstorno', 'FalhaCancelamento'], true) ? 'review' : 'requested'; }
         Store::begin();
         try {
             if ($existing) { Store::update('transactions', $row, ['id' => $existing['id']]); } else { Store::insert('transactions', $row); }
@@ -204,6 +312,7 @@ final class Payments
             if ($sum === null || !empty($wpdb->last_error)) { throw new \RuntimeException('Falha ao conferir o crédito financeiro. A conciliação será repetida.'); }
             $sum = (int) $sum;
             $state = $sum > 0 ? 'paid' : (Domain::terminal($data['Estado']) ? 'closed' : 'pending');
+            foreach (Store::transactions((int) $p['id']) as $tx) { if (in_array($tx['cancel_status'] ?? '', ['sending', 'requested', 'review'], true)) { $state = 'canceling'; break; } }
             Store::update('payments', ['state' => $state, 'synced_at' => current_time('mysql', true), 'last_error' => '', 'webhook_error' => ''], ['id' => $p['id']]);
             Store::commit();
         } catch (\Throwable $e) { Store::rollback(); throw $e; }
