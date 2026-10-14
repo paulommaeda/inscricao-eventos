@@ -77,6 +77,7 @@ Para novas entregas, aumente a versão no cabeçalho de `inscricao-eventos.php`,
 
 ```sh
 php tests/financial.php
+php tests/authentication.php
 npm install
 npx playwright install chromium
 npm test
@@ -88,3 +89,11 @@ Os testes financeiros usam dublês de WordPress/banco/K8 para verificar valores,
 Nenhum teste automatizado cria cobrança real. A versão inicial foi validada localmente com respostas simuladas; instalação no seu WordPress, autorização das credenciais, opções efetivas de parcelamento e callback real precisam de homologação na conta K8.
 
 Contrato utilizado: [checkout hospedado K8](https://docs.meuk8.com.br/reference/criatransacaocheckout_criatransacaocheckout_criatransacaocheckout_post), [consulta por referência](https://docs.meuk8.com.br/reference/consultatransacao_consultatransacaoreferencia_consultatransacaoreferencia_post), [callbacks](https://docs.meuk8.com.br/docs/payload-callback) e Swagger oficial `/PagamentosAPI/swagger/docs/v1`, consultado nesta implementação.
+
+## Autenticação recusada / HTTP 400
+
+Na versão 1.0.1, o plugin envia o formulário OAuth explicitamente codificado, conserva símbolos como `+`, `&` e `=` das chaves e limpa espaços/quebras de linha acidentais nas bordas. O teste administrativo consulta novamente a API, mesmo quando existe um token em cache.
+
+O erro agora informa **ambiente**, **API** e o motivo estruturado devolvido pelo K8, sem exibir chaves ou tokens. Se aparecer “As credenciais do usuário não conferem”, confirme Client ID e Client Secret gerados no **K8 Pagamentos**, o ambiente escolhido e a habilitação da API/IP do servidor. Chaves de produção precisam da opção Produção; o padrão inicial do plugin é sandbox. Salve a configuração antes de clicar em testar.
+
+A autenticação foi comparada com a resposta pública do sandbox usando valores fictícios: o endpoint reconhece formulário OAuth e rejeita JSON com `unsupported_grant_type`. Nenhuma credencial real foi usada nessa verificação. A aprovação da sua conta ainda precisa ser testada no WordPress com suas chaves.

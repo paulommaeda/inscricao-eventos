@@ -158,18 +158,19 @@ final class Admin
         $s = (array) get_option('ie_settings', []);
         echo '<div class="wrap ie-admin"><h1>Configurações K8</h1>'; self::notice();
         echo '<div class="ie-panel"><p>Use as credenciais da <strong>API K8 Pay (PagamentosAPI)</strong>. O checkout hospedado recebe os dados do cartão e oferece o parcelamento do lote.</p>';
+        echo '<p><strong>Ambiente atual: ' . (($s['environment'] ?? 'sandbox') === 'production' ? 'Produção' : 'Sandbox (testes)') . '.</strong> Se você gerou as chaves no painel de produção, selecione Produção abaixo. Credenciais do K8 Cobranças e do K8 Pagamentos devem ser conferidas no respectivo painel.</p>';
         self::form('ie_save_settings'); echo '<div class="ie-form-grid"><label class="ie-field"><span>Ambiente</span><select name="environment"><option value="sandbox" ' . selected($s['environment'] ?? 'sandbox', 'sandbox', false) . '>Testes (sandbox)</option><option value="production" ' . selected($s['environment'] ?? '', 'production', false) . '>Produção</option></select></label>';
         foreach (['client_id' => 'Client ID', 'client_secret' => 'Client Secret', 'aes_key' => 'Chave AES (16 caracteres)'] as $key => $label) { self::input($key, $label, '', 'password', 'autocomplete="new-password"'); }
         self::check('auto_update', 'Instalar automaticamente novas versões do GitHub', (bool) ($s['auto_update'] ?? true));
         echo '</div><p>' . (empty($s['credentials']) ? 'Credenciais ainda não cadastradas.' : 'Credenciais protegidas já cadastradas. Deixe os três campos vazios para mantê-las.') . ' Ao substituir credenciais, preencha os três campos. Testes e produção possuem inscrições e pagamentos separados.</p><button class="button button-primary">Salvar configurações</button></form></div><div class="ie-panel">';
-        self::form('ie_test_k8'); echo '<button class="button">Testar autenticação K8</button><p>Este teste autentica na API; a homologação do checkout exige uma inscrição de teste no sandbox.</p></form></div><div class="ie-panel"><h2>Como colocar no site</h2><p>Use <code>[inscricao_eventos evento="1"]</code> em uma página. Sem o atributo evento, o visitante pode escolher entre os eventos publicados.</p><p>Configure essa página no cadastro do evento para receber o retorno do K8. O endereço do webhook é enviado automaticamente em cada checkout.</p><p>Atualizações: <a href="https://github.com/paulommaeda/inscricao-eventos" target="_blank" rel="noopener">paulommaeda/inscricao-eventos</a>, branch <code>main</code>. O número da versão deve aumentar em cada entrega.</p><p>A conciliação usa WP-Cron a cada cinco minutos. Em sites com pouco tráfego, configure um cron do servidor para chamar <code>wp-cron.php</code> regularmente.</p></div></div>';
+        self::form('ie_test_k8'); echo '<button class="button">Testar autenticação K8</button><p>O teste utiliza as configurações já salvas e faz uma nova autenticação, sem reutilizar token em cache. Salve alterações antes de testar. Se houver HTTP 400, será mostrado o motivo devolvido pelo K8, sem exibir suas chaves.</p><p>A homologação do checkout exige uma inscrição de teste no sandbox.</p></form></div><div class="ie-panel"><h2>Como colocar no site</h2><p>Use <code>[inscricao_eventos evento="1"]</code> em uma página. Sem o atributo evento, o visitante pode escolher entre os eventos publicados.</p><p>Configure essa página no cadastro do evento para receber o retorno do K8. O endereço do webhook é enviado automaticamente em cada checkout.</p><p>Atualizações: <a href="https://github.com/paulommaeda/inscricao-eventos" target="_blank" rel="noopener">paulommaeda/inscricao-eventos</a>, branch <code>main</code>. O número da versão deve aumentar em cada entrega.</p><p>A conciliação usa WP-Cron a cada cinco minutos. Em sites com pouco tráfego, configure um cron do servidor para chamar <code>wp-cron.php</code> regularmente.</p></div></div>';
     }
     public static function saveSettings(): void
     {
         self::guard('ie_save_settings');
         try {
             $s = (array) get_option('ie_settings', []); $input = wp_unslash($_POST);
-            $id = trim((string) ($input['client_id'] ?? '')); $secret = (string) ($input['client_secret'] ?? ''); $aes = (string) ($input['aes_key'] ?? '');
+            $id = Gateway::cleanCredential((string) ($input['client_id'] ?? '')); $secret = Gateway::cleanCredential((string) ($input['client_secret'] ?? '')); $aes = Gateway::cleanCredential((string) ($input['aes_key'] ?? ''));
             if ($id || $secret || $aes) {
                 if (!$id || !$secret || strlen($aes) !== 16) { throw new \RuntimeException('Preencha Client ID, Client Secret e uma chave AES de 16 caracteres.'); }
                 $s['credentials'] = Security::seal(wp_json_encode(['id' => $id, 'secret' => $secret, 'aes' => $aes]));
@@ -181,7 +182,7 @@ final class Admin
     public static function testK8(): void
     {
         self::guard('ie_test_k8');
-        try { (new Gateway())->authenticate(); self::redirect('ie-settings', 'Autenticação K8 confirmada. Faça uma inscrição de teste para homologar o checkout e a baixa.'); }
+        try { (new Gateway())->authenticate(true); self::redirect('ie-settings', 'Autenticação K8 confirmada. Faça uma inscrição de teste para homologar o checkout e a baixa.'); }
         catch (\Throwable $e) { self::redirect('ie-settings', $e->getMessage(), true); }
     }
     private static function filters(): array

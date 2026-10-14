@@ -14,6 +14,7 @@ final class Gateway
         $encoded = (string) ($settings['credentials'] ?? '');
         if (!$encoded) { throw new \RuntimeException('Os pagamentos ainda não foram configurados pela organização.'); }
         $this->credentials = json_decode(Security::unseal($encoded), true) ?: [];
+        foreach (['id', 'secret', 'aes'] as $field) { $this->credentials[$field] = self::cleanCredential((string) ($this->credentials[$field] ?? '')); }
         if (empty($this->credentials['id']) || empty($this->credentials['secret']) || strlen($this->credentials['aes'] ?? '') !== 16) { throw new \RuntimeException('Confira Client ID, Client Secret e chave AES do K8 Pay.'); }
         $this->base = ($settings['environment'] ?? 'sandbox') === 'production' ? 'https://pagamentos.meuk8.com.br/PagamentosAPI' : 'https://sandbox.meuk8.com.br/PagamentosAPI';
         $this->cache = 'ie_k8_token_' . hash('sha256', $this->base . $encoded);
@@ -25,15 +26,47 @@ final class Gateway
         if (is_wp_error($r)) { throw new \RuntimeException('Não foi possível comunicar com o K8. A tentativa será conferida antes de gerar outra cobrança.'); }
         return $r;
     }
-    public function authenticate(): string
+    public static function cleanCredential(string $value): string
     {
+        // API keys copied from dashboards can carry a newline, NBSP, BOM or zero-width space at the edges.
+        $value = preg_replace('/^[\s\x{00A0}\x{FEFF}\x{200B}]+|[\s\x{00A0}\x{FEFF}\x{200B}]+$/u', '', $value);
+        if ($value === null) { throw new \RuntimeException('Há caracteres inválidos nas credenciais K8. Copie novamente do painel.'); }
+        return $value;
+    }
+    private function authError(int $code, string $body): string
+    {
+        $environment = str_contains($this->base, 'sandbox.meuk8.com.br') ? 'Sandbox (testes)' : 'Produção';
+        $message = 'Autenticação K8 recusada (HTTP ' . $code . '). Ambiente: ' . $environment . '. API: K8 Pagamentos.';
+        $data = json_decode($body, true);
+        if (is_array($data)) {
+            $parts = [];
+            foreach (['error', 'error_description'] as $field) {
+                if (!isset($data[$field]) || !is_string($data[$field])) { continue; }
+                $part = html_entity_decode(strip_tags($data[$field]), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+                foreach ($this->credentials as $secret) {
+                    if ($secret !== '') { $part = str_replace(array_unique([$secret, urlencode($secret), rawurlencode($secret)]), '[oculto]', $part); }
+                }
+                $part = preg_replace('/\b(Bearer|access_token|client_secret|password|aeskey)\s*[:=]?\s*["\']?[^\s,"\';]+/i', '$1 [oculto]', $part);
+                $parts[] = Domain::cut(sanitize_text_field($part), 240);
+            }
+            if ($parts) { $message .= ' Retorno K8: ' . implode(' — ', $parts) . '.'; }
+            if (($data['error'] ?? '') === 'unsupported_grant_type' || ($data['error'] ?? '') === 'invalid_request') {
+                return $message . ' O K8 não reconheceu o formato de autenticação. A requisição deve usar formulário com grant_type=password.';
+            }
+        }
+        return $message . ' Confira se Client ID e Client Secret foram gerados no K8 Pagamentos deste ambiente, se a API está habilitada e se o IP do servidor está autorizado.';
+    }
+    public function authenticate(bool $fresh = false): string
+    {
+        if ($fresh) { delete_transient($this->cache); }
         $cached = get_transient($this->cache);
         if (is_string($cached) && $cached) { return Security::unseal($cached); }
-        $r = $this->transport('/token', ['method' => 'POST', 'headers' => ['Content-Type' => 'application/x-www-form-urlencoded'], 'body' => ['username' => $this->credentials['id'], 'password' => $this->credentials['secret'], 'grant_type' => 'password']]);
+        $form = http_build_query(['username' => $this->credentials['id'], 'password' => $this->credentials['secret'], 'grant_type' => 'password'], '', '&', PHP_QUERY_RFC1738);
+        $r = $this->transport('/token', ['method' => 'POST', 'headers' => ['Accept' => 'application/json', 'Content-Type' => 'application/x-www-form-urlencoded; charset=UTF-8'], 'body' => $form]);
         $code = (int) wp_remote_retrieve_response_code($r);
-        if ($code !== 200) { throw new \RuntimeException('Autenticação K8 recusada (HTTP ' . $code . '). Confira as credenciais do K8 Pay e o ambiente.'); }
+        if ($code !== 200) { throw new \RuntimeException($this->authError($code, wp_remote_retrieve_body($r))); }
         $data = json_decode(wp_remote_retrieve_body($r), true);
-        $token = $data['access_token'] ?? '';
+        $token = $data['access_token'] ?? $data['token'] ?? '';
         if (!is_string($token) || !$token) { throw new \RuntimeException('K8 não retornou um token válido.'); }
         set_transient($this->cache, Security::seal($token), max(1, min(3600, (int) ($data['expires_in'] ?? 300) - 30)));
         return $token;

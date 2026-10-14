@@ -14,6 +14,7 @@ jobs:
           extensions: openssl
       - run: find . -name '*.php' -not -path './node_modules/*' -print0 | xargs -0 -n1 php -l
       - run: php tests/financial.php
+      - run: php tests/authentication.php
   browser:
     runs-on: ubuntu-latest
     steps:
