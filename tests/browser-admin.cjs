@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 (async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ie-admin-test-'));
   const probe = net.createServer(); await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve)); const port = probe.address().port; await new Promise(resolve => probe.close(resolve));
-  const base = `http://127.0.0.1:${port}`; const server = spawn(process.env.IE_TEST_PHP || 'php', ['-S', `127.0.0.1:${port}`, path.join(__dirname, 'admin-fixture.php')], { env: { ...process.env, IE_ADMIN_STATE: path.join(directory, 'state.json') }, stdio: ['ignore', 'ignore', 'pipe'] });
+  const base = `http://127.0.0.1:${port}`; const server = spawn(process.env.IE_TEST_PHP || 'php', ['-d', 'error_reporting=E_ALL', '-d', 'display_errors=0', '-S', `127.0.0.1:${port}`, path.join(__dirname, 'admin-fixture.php')], { env: { ...process.env, IE_ADMIN_STATE: path.join(directory, 'state.json') }, stdio: ['ignore', 'ignore', 'pipe'] });
   let logs = ''; server.stderr.on('data', data => { logs += data; }); let browser;
   try {
     for (let i = 0; i < 50; i++) { try { await fetch(base); break; } catch { await new Promise(resolve => setTimeout(resolve, 100)); } }
@@ -37,7 +37,7 @@ const assert = require('node:assert/strict');
     const badNonce = await page.request.post(base + '/admin-post.php', { form: { action: 'ie_cancel_payment', registration_id: '1', payment_id: '1', remote_id: 'ui-transaction', operation: 'refund', reason: 'Repeated', confirmed: '1', _wpnonce: 'invalid' } });
     assert.equal(badNonce.status(), 403); assert.equal((await state()).calls.length, data.calls.length);
     if (process.env.IE_TEST_ARTIFACTS) { fs.mkdirSync(process.env.IE_TEST_ARTIFACTS, { recursive: true }); await page.screenshot({ path: path.join(process.env.IE_TEST_ARTIFACTS, 'admin-mobile.png'), fullPage: true }); }
-    assert.deepEqual(errors, []); assert(!/Warning:|Fatal error:|Deprecated:/.test(logs));
+    assert.deepEqual(errors, []); assert(!/Warning:|Fatal error:|Deprecated:/.test(logs), logs);
     console.log('OK: PHP admin edit, trash/restore, history, diagnosis, confirmation, PIX refund, nonce and mobile layout.');
   } finally { if (browser) await browser.close(); server.kill(); fs.rmSync(directory, { recursive: true, force: true }); }
 })().catch(error => { console.error(error); process.exit(1); });
