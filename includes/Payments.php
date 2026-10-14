@@ -102,8 +102,26 @@ final class Payments
             $p = Store::payment($paymentId); $r = Store::registration((int) $p['registration_id']); $api = new Gateway();
             if (!hash_equals($p['scope'], $api->scope())) { throw new \RuntimeException('Pagamento pertence a outra conta ou ambiente K8.'); }
             if ($remoteId !== null && !preg_match('/^[A-Za-z0-9-]{1,100}$/D', $remoteId)) { throw new \RuntimeException('Identificador de transação inválido.'); }
-            $data = $remoteId ? $api->request('/api/ConsultaTransacao', ['Identificador' => $remoteId]) : $api->request('/api/ConsultaTransacaoReferencia', ['Referencia' => $p['reference']]);
-            self::applyVerified($p, $r, $data, $remoteId);
+            if ($remoteId) {
+                // Only a retry hint: no transaction or credit is inserted until the API confirms the match.
+                Store::update('payments', ['remote_id_hint' => $remoteId], ['id' => $paymentId]);
+                $ids = [$remoteId];
+            } else {
+                $rows = $wpdb->get_results($wpdb->prepare('SELECT * FROM ' . Store::table('transactions') . ' WHERE payment_id=%d', $paymentId), ARRAY_A);
+                if ($rows === null || !empty($wpdb->last_error)) { throw new \RuntimeException('Não foi possível conferir as transações já vinculadas.'); }
+                $ids = array_column($rows, 'remote_id');
+                if (!empty($p['remote_id_hint'])) { $ids[] = $p['remote_id_hint']; }
+                $ids = array_values(array_unique($ids));
+            }
+            if ($ids) {
+                foreach ($ids as $candidate) {
+                    $data = $api->request('/api/ConsultaTransacao', ['Identificador' => $candidate]);
+                    self::applyVerified($p, $r, $data, $candidate);
+                }
+            } else {
+                $data = $api->request('/api/ConsultaTransacaoReferencia', ['Referencia' => $p['reference']]);
+                self::applyVerified($p, $r, $data);
+            }
         } catch (\Throwable $e) {
             Store::update('payments', ['synced_at' => current_time('mysql', true), 'last_error' => Domain::cut($e->getMessage(), 500)], ['id' => $paymentId]);
             throw $e;
@@ -115,7 +133,11 @@ final class Payments
     {
         global $wpdb;
         $id = (string) ($data['Identificador'] ?? '');
-        if (!preg_match('/^[A-Za-z0-9-]{1,100}$/D', $id) || ($expectedId && $id !== $expectedId) || ($data['Referencia'] ?? '') !== $p['reference'] || ($data['NumeroPedido'] ?? '') !== $p['reference'] || preg_replace('/\D/', '', (string) ($data['ClienteCPFCNPJ'] ?? '')) !== Security::unseal($r['cpf_encrypted'])) { throw new \RuntimeException('A identidade da transação K8 não confere com a inscrição.'); }
+        $reference = (string) ($data['Referencia'] ?? ''); $order = (string) ($data['NumeroPedido'] ?? '');
+        $checkout = (string) ($data['IdentificadorCheckout'] ?? $data['CheckoutId'] ?? '');
+        $matches = $reference === $p['reference'] || $order === $p['reference'] || ($checkout !== '' && !empty($p['checkout_id']) && $checkout === $p['checkout_id']);
+        $conflicts = ($reference !== '' && $reference !== $p['reference']) || ($order !== '' && $order !== $p['reference']) || ($checkout !== '' && !empty($p['checkout_id']) && $checkout !== $p['checkout_id']);
+        if (!preg_match('/^[A-Za-z0-9-]{1,100}$/D', $id) || ($expectedId && $id !== $expectedId) || !$matches || $conflicts || preg_replace('/\D/', '', (string) ($data['ClienteCPFCNPJ'] ?? '')) !== Security::unseal($r['cpf_encrypted'])) { throw new \RuntimeException('A identidade da transação K8 não confere com a inscrição (ID, pedido/referência ou CPF).'); }
         $table = Store::table('transactions');
         $existing = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE scope=%s AND remote_id=%s", $p['scope'], $id), ARRAY_A);
         if ($existing && (int) $existing['payment_id'] !== (int) $p['id']) { throw new \RuntimeException('Transação K8 já vinculada a outro pagamento.'); }

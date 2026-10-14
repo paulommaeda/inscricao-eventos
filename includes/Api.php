@@ -12,7 +12,7 @@ final class Api
         foreach (['register', 'lookup', 'account', 'payment', 'refresh', 'logout'] as $action) {
             register_rest_route('inscricao-eventos/v1', '/' . $action, ['methods' => 'POST', 'permission_callback' => [Security::class, 'publicPermission'], 'callback' => static fn($req) => self::respond(static fn() => self::action($action, $req))]);
         }
-        register_rest_route('inscricao-eventos/v1', '/webhook/(?P<id>\d+)', ['methods' => ['POST', 'GET'], 'permission_callback' => [self::class, 'webhookPermission'], 'callback' => [self::class, 'webhook']]);
+        register_rest_route('inscricao-eventos/v1', '/webhook/(?P<payment_id>\d+)', ['methods' => ['POST', 'GET'], 'permission_callback' => [self::class, 'webhookPermission'], 'callback' => [self::class, 'webhook']]);
     }
     public static function respond(callable $fn): \WP_REST_Response
     {
@@ -58,19 +58,52 @@ final class Api
     public static function webhookPermission(\WP_REST_Request $req)
     {
         try {
-            $p = Store::payment(absint($req['id'])); $key = (string) $req->get_param('key');
+            $p = Store::payment(self::webhookPaymentId($req));
+            $query = $req->get_query_params(); $key = $query['key'] ?? '';
+            if (!is_string($key)) { throw new \RuntimeException('Token inválido.'); }
             if (!$key || !hash_equals(Payments::callbackKey($p), $key)) { throw new \RuntimeException('Token inválido.'); }
             return true;
         } catch (\Throwable $e) { return new \WP_Error('ie_webhook', 'Webhook não autorizado.', ['status' => 403]); }
     }
+    private static function webhookPaymentId(\WP_REST_Request $req): int
+    {
+        // URL parameters cannot be replaced by a remote "id" in the POST body or query string.
+        $url = $req->get_url_params();
+        return absint($url['payment_id'] ?? $url['id'] ?? 0);
+    }
+    public static function webhookRemoteId(\WP_REST_Request $req): ?string
+    {
+        $json = $req->get_json_params();
+        $raw = json_decode($req->get_body(), true);
+        $inputs = [$req->get_query_params(), $req->get_body_params(), is_array($json) ? $json : [], is_array($raw) ? $raw : []];
+        // The K8 fallback uses ID_BknBank. Prefer this transaction ID over other generic ID fields.
+        foreach (['id_bknbank', 'identificador', 'idtransacao', 'id'] as $alias) {
+            foreach ($inputs as $input) {
+                foreach ($input as $name => $value) {
+                    if (strtolower((string) $name) !== $alias || $value === null || $value === '') { continue; }
+                    if (!is_string($value) && !is_int($value)) { throw new \RuntimeException('Identificador da notificação K8 inválido.'); }
+                    $id = trim((string) $value);
+                    if (!preg_match('/^[A-Za-z0-9-]{1,100}$/D', $id)) { throw new \RuntimeException('Identificador da notificação K8 inválido.'); }
+                    return $id;
+                }
+            }
+        }
+        return null;
+    }
     public static function webhook(\WP_REST_Request $req): \WP_REST_Response
     {
+        $id = self::webhookPaymentId($req);
         try {
-            $data = $req->get_json_params();
-            if (!is_array($data)) { $data = []; }
-            $remote = $data['Identificador'] ?? $req->get_param('Identificador') ?? $req->get_param('ID') ?? $req->get_param('idTransacao');
-            Payments::sync(absint($req['id']), is_scalar($remote) && $remote ? (string) $remote : null);
-            return new \WP_REST_Response(['ok' => true], 200);
-        } catch (\Throwable $e) { return new \WP_REST_Response(['message' => 'A conciliação será tentada novamente.'], 503); }
+            $remote = self::webhookRemoteId($req);
+            Store::update('payments', ['webhook_at' => current_time('mysql', true)], ['id' => $id]);
+            Payments::sync($id, $remote);
+            Store::update('payments', ['webhook_error' => ''], ['id' => $id]);
+            $response = new \WP_REST_Response(['Retorno' => 'OK', 'ok' => true], 200);
+        } catch (\Throwable $e) {
+            try { Store::update('payments', ['webhook_at' => current_time('mysql', true), 'webhook_error' => Domain::cut($e->getMessage(), 500)], ['id' => $id]); } catch (\Throwable $ignored) { /* Still return a retryable failure. */ }
+            $response = new \WP_REST_Response(['Retorno' => 'ERRO', 'message' => 'A conciliação será tentada novamente.'], 503);
+        }
+        $response->header('Cache-Control', 'no-store, private, max-age=0');
+        return $response;
     }
 }

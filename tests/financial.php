@@ -52,7 +52,7 @@ queue(remote($p, 'tx-one', 'EstornarPIX')); P::sync($p['id'], 'tx-one'); same(S:
 queue(remote($p, 'tx-one', 'Estornado')); P::sync($p['id'], 'tx-one'); same(S::paid($r['id']), 0, 'Confirmed refund restores debt');
 queue(remote($p, 'tx-one')); P::sync($p['id'], 'tx-one');
 // Simulate storage failure: transaction and payment state roll back together.
-$wpdb->failUpdate = 'wp_ie_payments'; queue(remote($p, 'tx-one', 'Estornado')); fails(fn() => P::sync($p['id'], 'tx-one'), 'Storage failure'); same(S::paid($r['id']), 10000, 'Credit rolled back');
+$wpdb->failUpdate = 'wp_ie_payments'; $wpdb->failUpdateField = 'state'; queue(remote($p, 'tx-one', 'Estornado')); fails(fn() => P::sync($p['id'], 'tx-one'), 'Storage failure'); same(S::paid($r['id']), 10000, 'Credit rolled back');
 S::update('lots', ['price' => 55000, 'max_installments' => 6], ['id' => $lotId]); same(S::registration($r['id'])['total'], 49000, 'Existing lot price frozen'); same(S::registration($r['id'])['max_installments'], 10, 'Existing installments frozen');
 queue(['Retorno' => 'OK', 'Identificador' => 'checkout-two', 'URL' => 'https://sandbox.meuk8.com.br/PagamentosUI/checkout?id=two']);
 $second = P::create($r, '390.00'); $p2 = S::payment($second['payment_id']); queue(remote($p2, 'tx-two')); P::sync($p2['id'], 'tx-two'); same(S::balance($r)['balance'], 0, 'Monthly payments settle exact balance'); fails(fn() => P::create($r, '1'), 'Cannot charge after settlement');

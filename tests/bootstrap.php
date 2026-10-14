@@ -2,7 +2,7 @@
 /** Isolated WordPress / gateway doubles. No real payments or emails are sent. */
 define('ABSPATH', __DIR__ . '/');
 define('ARRAY_A', 'ARRAY_A');
-define('IE_VERSION', '1.0.1');
+define('IE_VERSION', '1.0.2');
 define('DAY_IN_SECONDS', 86400); define('HOUR_IN_SECONDS', 3600);
 $GLOBALS['test_options'] = []; $GLOBALS['test_transients'] = []; $GLOBALS['http_queue'] = []; $GLOBALS['http_calls'] = [];
 function wp_salt($scheme) { return 'local-test-salt-never-a-production-secret'; }
@@ -41,15 +41,29 @@ function wp_remote_request($url, $args) {
     return array_shift($GLOBALS['http_queue']);
 }
 class WP_REST_Request {
-    public function __construct(private array $headers = []) {}
+    public function __construct(private array $headers = [], private array $query = [], private array $url = [], private ?array $json = null, private array $form = [], private string $body = '') {}
     public function get_header($key) { return $this->headers[strtolower($key)] ?? ''; }
+    public function get_query_params() { return $this->query; }
+    public function get_url_params() { return $this->url; }
+    public function get_json_params() { return $this->json; }
+    public function get_body_params() { return $this->form; }
+    public function get_body() { return $this->body; }
+    public function get_param($key) { return $this->json[$key] ?? $this->form[$key] ?? $this->query[$key] ?? $this->url[$key] ?? null; }
 }
+class WP_REST_Response {
+    public array $headers = [];
+    public function __construct(private $data, private int $status = 200) {}
+    public function get_data() { return $this->data; }
+    public function get_status() { return $this->status; }
+    public function header($name, $value) { $this->headers[$name] = $value; }
+}
+function register_rest_route($namespace, $route, $args) { $GLOBALS['test_routes'][$namespace . $route] = $args; }
 
 final class TestDB
 {
     public string $prefix = 'wp_'; public int $insert_id = 0;
     public array $rows = []; private array $seq = []; private ?array $snapshot = null;
-    public bool $failLock = false; public ?string $failUpdate = null;
+    public bool $failLock = false; public ?string $failUpdate = null; public ?string $failUpdateField = null;
     public bool $failSum = false;
     public function prepare($sql, ...$values) {
         if (isset($values[0]) && is_array($values[0])) $values = $values[0];
@@ -60,11 +74,11 @@ final class TestDB
         if ($table === 'wp_ie_registrations') foreach ($this->rows[$table] ?? [] as $r) if ($r['event_id'] === $data['event_id'] && $r['scope'] === $data['scope'] && $r['cpf_hash'] === $data['cpf_hash']) return false;
         $id = ($this->seq[$table] ?? 0) + 1; $this->seq[$table] = $id; $this->insert_id = $id;
         $data = array_merge(['id' => $id], $data);
-        if ($table === 'wp_ie_payments') $data = array_merge(['checkout_id' => null, 'synced_at' => null], $data);
+        if ($table === 'wp_ie_payments') $data = array_merge(['checkout_id' => null, 'synced_at' => null, 'remote_id_hint' => '', 'webhook_at' => null, 'webhook_error' => ''], $data);
         $this->rows[$table][$id] = $data; return 1;
     }
     public function update($table, $data, $where) {
-        if ($this->failUpdate === $table) { $this->failUpdate = null; return false; }
+        if ($this->failUpdate === $table && ($this->failUpdateField === null || array_key_exists($this->failUpdateField, $data))) { $this->failUpdate = null; $this->failUpdateField = null; return false; }
         $n = 0; foreach ($this->rows[$table] ?? [] as $id => $r) if ($this->matches($r, $where)) { $this->rows[$table][$id] = array_merge($r, $data); $n++; } return $n;
     }
     public function delete($table, $where) { $n = 0; foreach ($this->rows[$table] ?? [] as $id => $r) if ($this->matches($r, $where)) { unset($this->rows[$table][$id]); $n++; } return $n; }

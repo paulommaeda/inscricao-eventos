@@ -95,7 +95,13 @@ final class Gateway
             if ($code === 401 && !$attempt) { delete_transient($this->cache); continue; }
             if ($code < 200 || $code >= 300) { throw new \RuntimeException('K8 retornou HTTP ' . $code . '. Confira a tentativa no painel antes de repetir.'); }
             $data = self::decode(wp_remote_retrieve_body($r), $this->credentials['aes']);
-            if (($data['Retorno'] ?? '') !== 'OK') { throw new \RuntimeException('K8 não confirmou esta operação. Confira a tentativa no painel K8.'); }
+            if (($data['Retorno'] ?? '') !== 'OK') {
+                $detail = is_string($data['DetalhesErro'] ?? null) ? strip_tags($data['DetalhesErro']) : '';
+                foreach ($this->credentials as $secret) { if ($secret !== '') { $detail = str_replace([$secret, urlencode($secret), rawurlencode($secret)], '[oculto]', $detail); } }
+                $detail = preg_replace('/\b(Bearer|access_token|client_secret|password|aeskey)\s*[:=]?\s*["\']?[^\s,"\';]+/i', '$1 [oculto]', $detail);
+                $detail = preg_replace('/\b\d{11,14}\b/', '[documento oculto]', $detail);
+                throw new \RuntimeException('K8 não confirmou esta operação.' . ($detail ? ' Retorno K8: ' . Domain::cut(sanitize_text_field($detail), 300) . '.' : '') . ' Confira a tentativa no painel K8.');
+            }
             return $data;
         }
         throw new \RuntimeException('Não foi possível renovar a autenticação K8.');

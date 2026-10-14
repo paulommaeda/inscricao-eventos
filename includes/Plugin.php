@@ -12,6 +12,10 @@ final class Plugin
         add_filter('cron_schedules', static function ($s) { $s['ie_five_minutes'] = ['interval' => 300, 'display' => 'A cada cinco minutos']; return $s; });
         add_action('ie_reconcile', [Payments::class, 'cron']);
         add_action('plugins_loaded', [self::class, 'updates']);
+        add_action('plugins_loaded', static function () {
+            // Auto-updated code may receive a callback before an administrator opens the dashboard.
+            if (get_option('ie_schema_version') !== IE_VERSION) { Store::install(); }
+        }, 5);
         add_action('admin_init', static function () {
             if (get_option('ie_schema_version') !== IE_VERSION) { Store::install(); }
             self::schedule();

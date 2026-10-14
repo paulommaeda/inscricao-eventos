@@ -258,9 +258,11 @@ final class Admin
             foreach (Store::payments($id) as $p) {
                 echo '<div class="ie-panel"><h3>Tentativa #' . (int) $p['id'] . ' — ' . esc_html(Domain::money((int) $p['amount'])) . '</h3><p>Estado: <strong>' . esc_html($p['state']) . '</strong> · Crédito: ' . esc_html(Domain::money((int) $p['credit'])) . '</p><p>Referência: <code>' . esc_html($p['reference']) . '</code><br>Checkout K8: <code>' . esc_html($p['checkout_id'] ?? 'Não retornado') . '</code><br>Conferido em (UTC): ' . esc_html($p['synced_at'] ?? 'Ainda não conferido') . '</p>';
                 if ($p['last_error']) { echo '<p class="ie-error">' . esc_html($p['last_error']) . '</p>'; }
+                echo '<p>Último retorno K8 (UTC): ' . esc_html($p['webhook_at'] ?? 'Ainda não recebido') . '<br>Identificador para conciliação: <code>' . esc_html($p['remote_id_hint'] ?? '') . '</code></p>';
+                if (!empty($p['webhook_error'])) { echo '<p class="ie-error">Falha no retorno: ' . esc_html($p['webhook_error']) . '</p>'; }
                 if ($p['operator_note']) { echo '<p>' . esc_html($p['operator_note']) . '</p>'; }
                 self::form('ie_sync_payment', ['payment_id' => $p['id'], 'registration_id' => $id]);
-                self::input('remote_id', 'ID da transação K8 (opcional; vazio consulta a referência)', '', 'text', 'pattern="[A-Za-z0-9-]{1,100}"');
+                self::input('remote_id', 'ID da transação K8 (opcional; vazio usa o ID conhecido ou a referência)', '', 'text', 'pattern="[A-Za-z0-9-]{1,100}"');
                 echo '<p><button class="button">Consultar e conciliar no K8</button></p></form><p>Uma tentativa em conferência não gera outra cobrança automaticamente. Localize a referência no K8 e informe o ID da transação acima.</p></div>';
                 if (in_array($p['state'], ['review', 'creating', 'pending'], true)) {
                     echo '<details class="ie-panel"><summary>Recuperar tentativa após conferir no K8</summary><p>Para continuar um checkout já criado, copie seu identificador e sua URL. Para liberar uma nova tentativa, primeiro confirme no K8 que não há checkout ativo nem pagamento; desative qualquer link antigo. Pagamentos posteriores de tentativas antigas continuam sendo conciliados.</p>';
