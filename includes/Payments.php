@@ -31,7 +31,7 @@ final class Payments
         } finally { Store::unlock($lock); }
     }
 
-    public static function create(array $registration, $amount): array
+    public static function create(array $registration, $amount, ?string $selectedMethod = null, ?int $expectedInstallments = null): array
     {
         $lock = Store::lock('registration:' . $registration['id']);
         try {
@@ -41,8 +41,9 @@ final class Payments
             $gateway = new Gateway();
             if (!hash_equals($registration['scope'], $gateway->scope())) { throw new \RuntimeException('A inscrição pertence a outra conta ou ambiente K8. Procure a organização.'); }
             if ($event['status'] !== 'published' || !$event['payment_deadline'] || Domain::today($event) > $event['payment_deadline']) { throw new \RuntimeException('O prazo para novos pagamentos deste evento terminou. Procure a organização.'); }
-            $method = $registration['method'];
-            if (($method === 'Pix' && !$event['allow_pix']) || ($method === 'Cartao' && !$event['allow_card'])) { throw new \RuntimeException('Esta forma de pagamento foi desabilitada. Procure a organização.'); }
+            $method = $selectedMethod ?? $registration['method'];
+            if (!in_array($method, ['Pix', 'Cartao'], true)) { throw new \RuntimeException('Forma de pagamento inválida.'); }
+            if (($method === 'Pix' && (!$event['allow_pix'] || $registration['method'] !== 'Pix')) || ($method === 'Cartao' && !$event['allow_card'])) { throw new \RuntimeException('Esta forma de pagamento foi desabilitada. Procure a organização.'); }
             $balance = Store::balance($registration);
             if (!$balance['balance']) { throw new \RuntimeException('Sua inscrição já está quitada.'); }
             $cents = Domain::cents($amount);
@@ -51,14 +52,16 @@ final class Payments
             if ($method === 'Cartao' && $cents !== $balance['balance']) { throw new \RuntimeException('O cartão deve pagar o saldo completo; o parcelamento será escolhido no K8.'); }
             foreach (Store::payments((int) $registration['id']) as $old) {
                 if (!in_array($old['state'], ['creating', 'pending', 'review', 'canceling'], true)) { continue; }
-                if ($old['state'] === 'pending' && $old['checkout_url'] && (int) $old['amount'] === $cents) { return ['payment_id' => (int) $old['id'], 'url' => Security::gatewayURL($old['checkout_url'])]; }
+                if ($old['state'] === 'pending' && $old['method'] === $method && $old['checkout_url'] && (int) $old['amount'] === $cents) { return ['payment_id' => (int) $old['id'], 'url' => Security::gatewayURL($old['checkout_url'])]; }
                 throw new \RuntimeException('Há um pagamento em andamento. Confira ou conclua essa tentativa antes de gerar outra.');
             }
+            $installments = $method === 'Cartao' ? Domain::installments($registration, $event)['max'] : 1;
+            if ($method === 'Cartao' && $expectedInstallments !== null && $expectedInstallments !== $installments) { throw new \RuntimeException('O limite de parcelas mudou com a data. Atualize o saldo e confira as condições antes de continuar.'); }
             $settings = (array) get_option('ie_settings', []);
             if (($settings['environment'] ?? 'sandbox') === 'production' && wp_parse_url(home_url('/'), PHP_URL_SCHEME) !== 'https') { throw new \RuntimeException('A organização precisa habilitar HTTPS antes de receber pagamentos.'); }
             $gateway->authenticate(); // Avoid reserving a payment with invalid credentials.
             $reference = 'IE' . bin2hex(random_bytes(9));
-            $id = Store::insert('payments', ['registration_id' => $registration['id'], 'reference' => $reference, 'scope' => $gateway->scope(), 'amount' => $cents, 'method' => $method, 'cpf_snapshot' => $registration['cpf_encrypted'], 'checkout_url' => '', 'state' => 'creating', 'last_error' => '', 'operator_note' => '', 'created_at' => current_time('mysql', true)]);
+            $id = Store::insert('payments', ['registration_id' => $registration['id'], 'reference' => $reference, 'scope' => $gateway->scope(), 'amount' => $cents, 'method' => $method, 'max_installments' => $installments, 'cpf_snapshot' => $registration['cpf_encrypted'], 'checkout_url' => '', 'state' => 'creating', 'last_error' => '', 'operator_note' => '', 'created_at' => current_time('mysql', true)]);
             $payment = Store::payment($id);
             $return = add_query_arg(['ie_return' => 1, 'ie_event' => $event['id']], $event['public_page_id'] ? get_permalink((int) $event['public_page_id']) : home_url('/'));
             $callback = add_query_arg('key', self::callbackKey($payment), rest_url('inscricao-eventos/v1/webhook/' . $id));

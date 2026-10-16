@@ -37,13 +37,27 @@
       return `<form data-form="register" class="ie-form"><div class="ie-form-heading"><span class="ie-eyebrow">${esc(lot.name)} · inscrições abertas</span><h2>Garanta sua participação</h2><p>Preencha seus dados e escolha como pagar.</p></div>
         <div class="ie-fields"><label>Nome completo<input name="name" autocomplete="name" maxlength="200" minlength="3" required></label><label>E-mail<input type="email" name="email" autocomplete="email" maxlength="254" required></label><label>Telefone com DDD<input name="phone" type="tel" inputmode="tel" autocomplete="tel" maxlength="20" placeholder="(41) 99999-9999" required></label><label>CPF<input name="cpf" inputmode="numeric" autocomplete="off" maxlength="14" placeholder="000.000.000-00" data-cpf required></label></div>
         <fieldset class="ie-methods"><legend>Como deseja pagar?</legend>${e.allow_card ? `<label class="ie-method"><input type="radio" name="method" value="Cartao" ${!e.allow_pix ? 'checked' : ''}><span><b>Cartão de crédito</b><small>Até ${lot.max_installments}x no checkout K8</small></span></label>` : ''}${e.allow_pix ? `<label class="ie-method"><input type="radio" name="method" value="Pix" checked><span><b>Entrada + PIX mensais</b><small>Você escolhe o valor de cada pagamento</small></span></label>` : ''}</fieldset>
-        <div class="ie-entry" ${!e.allow_pix ? 'hidden' : ''}><label>Quanto deseja pagar de entrada? (R$)<input name="amount" type="number" inputmode="decimal" min="${(e.minimum_entry / 100).toFixed(2)}" max="${(lot.price / 100).toFixed(2)}" step="0.01" placeholder="Ex.: 100,00" ${e.allow_pix ? 'required' : ''}></label><small>Entrada mínima: ${money(e.minimum_entry)}. Você também pode pagar o valor completo por PIX.</small></div>
+        ${e.allow_card && e.allow_pix ? '<p class="ie-hint">Se começar por PIX, poderá quitar o saldo no cartão. O limite do lote reduz uma parcela a cada mês completo desde a inscrição, até o mínimo de 1x.</p>' : ''}
+        <div class="ie-entry" ${!e.allow_pix ? 'hidden' : ''}><label>Quanto deseja pagar de entrada? (R$)<input name="amount" type="number" inputmode="decimal" min="${(e.minimum_entry / 100).toFixed(2)}" max="${(lot.price / 100).toFixed(2)}" step="0.01" placeholder="Ex.: 100,00" ${e.allow_pix ? 'required' : 'disabled'}></label><small>Entrada mínima: ${money(e.minimum_entry)}. Você também pode pagar o valor completo por PIX.</small></div>
         <div class="ie-deadline">${deadline(e)}</div><label class="ie-accept"><input type="checkbox" name="accepted" required><span>Li e concordo com as condições da inscrição e com o prazo de quitação.</span></label>
         ${e.terms ? `<details class="ie-terms"><summary>Ler condições de inscrição</summary><div>${e.terms}</div></details>` : ''}${e.privacy_url ? `<a class="ie-privacy" href="${esc(e.privacy_url)}" target="_blank" rel="noopener">Política de privacidade</a>` : ''}
         <div class="ie-order"><span>Valor da inscrição · ${esc(lot.name)}</span><strong>${money(lot.price)}</strong></div><button type="submit" class="ie-btn">Continuar para pagamento <span aria-hidden="true">→</span></button></form>`;
     }
     function lookupForm() {
       return `<form data-form="lookup" class="ie-form ie-lookup"><span class="ie-eyebrow">Minha inscrição</span><h2>Continue de onde parou</h2><p>Informe seu CPF para consultar o saldo e fazer um novo pagamento.</p><label>CPF<input name="cpf" inputmode="numeric" autocomplete="off" maxlength="14" placeholder="000.000.000-00" data-cpf required></label><button type="submit" class="ie-btn">Consultar inscrição <span aria-hidden="true">→</span></button></form>`;
+    }
+    function accountPaymentForm(a) {
+      const methods = a.payment_methods || [a.method];
+      const selected = methods.includes(a.method) ? a.method : methods[0];
+      const card = a.card_installments || { base: a.max_installments, max: a.max_installments, next_reduction: '' };
+      return `<form data-form="pay" class="ie-payment-box"><h3>Como deseja pagar o saldo?</h3>
+        <fieldset class="ie-methods"><legend>Escolha a forma de pagamento</legend>
+          ${methods.includes('Pix') ? `<label class="ie-method"><input type="radio" name="method" value="Pix" ${selected === 'Pix' ? 'checked' : ''}><span><b>Continuar com PIX</b><small>Você escolhe quanto pagar agora</small></span></label>` : ''}
+          ${methods.includes('Cartao') ? `<label class="ie-method"><input type="radio" name="method" value="Cartao" ${selected === 'Cartao' ? 'checked' : ''}><span><b>Quitar saldo no cartão</b><small>${money(a.balance)} · ${card.max > 1 ? `até ${card.max}x` : 'à vista'} no K8</small></span></label>` : ''}
+        </fieldset>
+        ${methods.includes('Pix') ? `<div class="ie-entry" ${selected !== 'Pix' ? 'hidden' : ''}><p>Escolha qualquer valor até o saldo devedor.</p><label>Valor do PIX (R$)<input name="amount" type="number" inputmode="decimal" min="0.01" max="${(a.balance / 100).toFixed(2)}" step="0.01" ${selected === 'Pix' ? 'required' : 'disabled'} placeholder="Ex.: 100,00"></label></div>` : ''}
+        <div class="ie-card-terms" ${selected !== 'Cartao' ? 'hidden' : ''}><p>Saldo total de <b>${money(a.balance)}</b>, ${card.max > 1 ? `em até <b>${card.max}x</b>` : '<b>à vista (1x)</b>'} no checkout K8. Os pagamentos confirmados já foram descontados.</p><small>Limite original do lote: ${card.base}x. Reduz uma parcela a cada mês completo desde a inscrição, até o mínimo de 1x.${card.next_reduction ? ` Próxima redução: ${date(card.next_reduction)}.` : ''} O limite é conferido ao criar o pagamento.</small></div>
+        <button type="submit" class="ie-btn">Pagar agora →</button></form>`;
     }
     function accountView(a) {
       const outstanding = a.payments.find(p => ['pending', 'review', 'creating', 'canceling'].includes(p.state));
@@ -52,10 +66,10 @@
       if (a.registration_status && a.registration_status !== 'active') pay = `<div class="ie-deadline"><b>${a.registration_status === 'deleted' ? 'Inscrição excluída' : 'Inscrição cancelada'}</b><p>Entre em contato com a organização para conferir a inscrição e seus pagamentos.</p></div>`;
       else if (outstanding?.state === 'canceling') pay = '<div class="ie-deadline"><b>Cancelamento / estorno em conferência</b><p>O saldo será atualizado após a confirmação do K8. Acompanhe pelo botão Atualizar saldo.</p></div>';
       else if (a.balance === 0) pay = '<div class="ie-success"><b>Inscrição quitada!</b><p>Seus pagamentos foram confirmados. Esperamos você no evento.</p></div>';
-      else if (outstanding) pay = outstanding.url ? `<div class="ie-payment-box"><h3>Há um pagamento em andamento</h3><p>Conclua o pagamento de ${money(outstanding.amount)} ou atualize após pagar.</p><a class="ie-btn" href="${esc(outstanding.url)}">Continuar pagamento no K8 →</a></div>` : '<div class="ie-deadline"><b>Pagamento em conferência</b><p>Procure a organização antes de gerar outra tentativa.</p></div>';
-      else if (a.can_pay) pay = `<form data-form="pay" class="ie-payment-box"><h3>${a.method === 'Pix' ? 'Quanto deseja pagar agora?' : 'Concluir pagamento no cartão'}</h3>${a.method === 'Pix' ? `<p>Escolha qualquer valor até o saldo devedor.</p><label>Valor do PIX (R$)<input name="amount" type="number" inputmode="decimal" min="0.01" max="${(a.balance / 100).toFixed(2)}" step="0.01" required placeholder="Ex.: 100,00"></label>` : `<p>Saldo total de ${money(a.balance)}, em até ${a.max_installments}x no K8.</p><input type="hidden" name="amount" value="${(a.balance / 100).toFixed(2)}">`}<button type="submit" class="ie-btn">Pagar agora →</button></form>`;
+      else if (outstanding) pay = outstanding.url ? `<div class="ie-payment-box"><h3>Há um pagamento em andamento</h3><p>Conclua o pagamento de ${money(outstanding.amount)} (${outstanding.method === 'Pix' ? 'PIX' : `cartão${outstanding.max_installments ? ` até ${outstanding.max_installments}x` : ''}`}) ou atualize após pagar. Para trocar o meio, peça à organização que confira e encerre a tentativa no K8.</p><a class="ie-btn" href="${esc(outstanding.url)}">Continuar pagamento no K8 →</a></div>` : '<div class="ie-deadline"><b>Pagamento em conferência</b><p>Procure a organização antes de gerar outra tentativa.</p></div>';
+      else if (a.can_pay) pay = accountPaymentForm(a);
       else pay = '<div class="ie-deadline"><b>Novos pagamentos indisponíveis</b><p>Procure a organização para orientar a quitação.</p></div>';
-      return `<div class="ie-account"><div class="ie-account-top"><div><span class="ie-eyebrow">${esc(a.lot)} · Inscrição #${a.id}</span><h2>Olá, ${esc(a.name)}.</h2></div><button type="button" class="ie-text-btn" data-action="logout">Sair</button></div><div class="ie-balances"><div><span>Total da inscrição</span><b>${money(a.total)}</b></div><div><span>Já confirmado</span><b>${money(a.paid)}</b></div><div class="ie-balance-main"><span>Saldo a pagar</span><b>${money(a.balance)}</b></div></div><div class="ie-deadline">${esc(a.message)}</div>${a.overpaid ? `<div class="ie-deadline">Há ${money(a.overpaid)} de pagamento excedente. Entre em contato com a organização.</div>` : ''}${pay}<div class="ie-history-heading"><h3>Seus pagamentos</h3><button type="button" class="ie-text-btn" data-action="refresh">↻ Atualizar saldo</button></div><p class="ie-hint">O saldo é atualizado após a confirmação pelo K8. O retorno ao site pode ocorrer antes dessa confirmação.</p><div class="ie-history">${a.payments.length ? a.payments.map(p => `<article><div><b>${p.method === 'Pix' ? 'PIX' : 'Cartão'} · ${money(p.amount)}</b><small>${date(p.created_at.split(' ')[0])}</small></div><span class="ie-status ie-status-${esc(p.state)}">${esc(labels[p.state] || p.state)}</span></article>`).join('') : '<p>Aguardando seu primeiro pagamento.</p>'}</div></div>`;
+      return `<div class="ie-account"><div class="ie-account-top"><div><span class="ie-eyebrow">${esc(a.lot)} · Inscrição #${a.id}</span><h2>Olá, ${esc(a.name)}.</h2></div><button type="button" class="ie-text-btn" data-action="logout">Sair</button></div><div class="ie-balances"><div><span>Total da inscrição</span><b>${money(a.total)}</b></div><div><span>Já confirmado</span><b>${money(a.paid)}</b></div><div class="ie-balance-main"><span>Saldo a pagar</span><b>${money(a.balance)}</b></div></div><div class="ie-deadline">${esc(a.message)}</div>${a.overpaid ? `<div class="ie-deadline">Há ${money(a.overpaid)} de pagamento excedente. Entre em contato com a organização.</div>` : ''}${pay}<div class="ie-history-heading"><h3>Seus pagamentos</h3><button type="button" class="ie-text-btn" data-action="refresh">↻ Atualizar saldo</button></div><p class="ie-hint">O saldo é atualizado após a confirmação pelo K8. O retorno ao site pode ocorrer antes dessa confirmação.</p><div class="ie-history">${a.payments.length ? a.payments.map(p => `<article><div><b>${p.method === 'Pix' ? 'PIX' : 'Cartão'} · ${money(p.amount)}</b><small>${date(p.created_at.split(' ')[0])}${p.method === 'Cartao' && p.max_installments ? ` · limite do checkout: ${p.max_installments}x` : ''}</small></div><span class="ie-status ie-status-${esc(p.state)}">${esc(labels[p.state] || p.state)}</span></article>`).join('') : '<p>Aguardando seu primeiro pagamento.</p>'}</div></div>`;
     }
 
     function render() {
@@ -85,7 +99,8 @@
     root.addEventListener('change', event => {
       if (event.target.name === 'method') {
         const entry = root.querySelector('.ie-entry'); const input = entry?.querySelector('input');
-        if (entry) entry.hidden = event.target.value !== 'Pix'; if (input) input.required = event.target.value === 'Pix';
+        if (entry) entry.hidden = event.target.value !== 'Pix'; if (input) { input.required = event.target.value === 'Pix'; input.disabled = event.target.value !== 'Pix'; }
+        const terms = root.querySelector('.ie-card-terms'); if (terms) terms.hidden = event.target.value !== 'Cartao';
       }
       if (event.target.matches('[data-events]')) { state.event = state.events.find(e => e.id === Number(event.target.value)); state.account = null; state.error = ''; render(); }
     });
@@ -102,16 +117,17 @@
     root.addEventListener('submit', async event => {
       const form = event.target.closest('[data-form]'); if (!form) return; event.preventDefault();
       if (state.busy || !form.reportValidity()) return;
-      const values = new FormData(form); const kind = form.dataset.form; let amount = values.get('amount');
+      const values = new FormData(form); const kind = form.dataset.form; const method = values.get('method'); let amount = values.get('amount');
       alert(''); busy(true);
       try {
         if (kind === 'lookup') { state.account = await api('lookup', { event_id: state.event.id, cpf: values.get('cpf') }); render(); return; }
         if (kind === 'register') {
-          const lot = selectedLot(); const method = values.get('method');
+          const lot = selectedLot();
           state.account = await api('register', { event_id: state.event.id, lot_id: lot.id, expected_price: lot.price, name: values.get('name'), email: values.get('email'), phone: values.get('phone'), cpf: values.get('cpf'), method, accepted_terms: values.get('accepted') === 'on' });
-          if (method === 'Cartao') amount = (state.account.balance / 100).toFixed(2);
         }
-        const payment = await api('payment', { amount });
+        if (method === 'Cartao') amount = (state.account.balance / 100).toFixed(2);
+        const expected = method === 'Cartao' ? state.account.card_installments?.max ?? state.account.max_installments : undefined;
+        const payment = await api('payment', { amount, method, ...(expected === undefined ? {} : { expected_installments: expected }) });
         window.location.assign(payment.url);
       } catch (e) {
         if (state.account) { try { state.account = await api('account', {}); } catch (_) {} render(); }

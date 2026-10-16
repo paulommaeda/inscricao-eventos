@@ -53,6 +53,27 @@ final class Domain
 
     public static function today(array $event): string { return (new \DateTimeImmutable('now', new \DateTimeZone($event['timezone'])))->format('Y-m-d'); }
 
+    /** One installment less per completed calendar month, anchored to the local registration day. */
+    public static function installments(array $registration, array $event, ?string $day = null): array
+    {
+        $base = (int) ($registration['max_installments'] ?? 0);
+        if ($base < 1 || $base > 12) { throw new \RuntimeException('Limite de parcelas da inscrição inválido. Procure a organização.'); }
+        $raw = (string) ($registration['created_at'] ?? '');
+        $created = \DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $raw, new \DateTimeZone('UTC'));
+        if (!$created || $created->format('Y-m-d H:i:s') !== $raw) { throw new \RuntimeException('Não foi possível conferir a data da inscrição para o parcelamento. Procure a organização.'); }
+        $zone = new \DateTimeZone($event['timezone']); $created = $created->setTimezone($zone);
+        $today = new \DateTimeImmutable(self::date($day ?? self::today($event)), $zone);
+        $months = ((int) $today->format('Y') - (int) $created->format('Y')) * 12 + (int) $today->format('n') - (int) $created->format('n');
+        // A registration on the 29th/30th/31st reaches its anniversary on a short month's last day.
+        if ((int) $today->format('j') < min((int) $created->format('j'), (int) $today->format('t'))) { $months--; }
+        $months = max(0, $months); $max = max(1, $base - $months); $next = '';
+        if ($max > 1) {
+            $nextMonth = $created->modify('first day of this month')->modify('+' . ($months + 1) . ' months');
+            $next = $nextMonth->setDate((int) $nextMonth->format('Y'), (int) $nextMonth->format('n'), min((int) $created->format('j'), (int) $nextMonth->format('t')))->format('Y-m-d');
+        }
+        return ['base' => $base, 'max' => $max, 'months' => $months, 'registered_on' => $created->format('Y-m-d'), 'next_reduction' => $next];
+    }
+
     public static function quote(array $event, array $lots, string $day): ?array
     {
         if ($event['status'] !== 'published' || $day < $event['registration_start'] || $day > $event['registration_end'] || ($event['payment_deadline'] && $day > $event['payment_deadline'])) { return null; }

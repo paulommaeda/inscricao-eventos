@@ -117,7 +117,9 @@ final class Gateway
         if (strlen($phone) > 11 && substr($phone, 0, 2) === '55') { $phone = substr($phone, 2); }
         $payload = ['Valor' => (int) $payment['amount'] / 100, 'ClienteCPFCNPJ' => $cpf, 'ClienteNome' => Domain::cut($registration['name'], 100), 'ClienteEmail' => $registration['email'], 'ClienteDDD' => substr($phone, 0, 2), 'ClienteNumeroCelular' => substr($phone, 2), 'ClienteDescricao' => Domain::cut($event['name'] . ' / ' . $registration['lot_name'] . ' / Inscrição #' . $registration['id'], 100), 'ClienteIP' => Security::ip(), 'URLRetorno' => $return, 'URLConfirmacao' => $callback, 'NumeroPedido' => $payment['reference'], 'Referencia' => $payment['reference']];
         if ($payment['method'] === 'Cartao') {
-            $max = (int) $registration['max_installments'];
+            // New attempts carry the server-calculated cap; legacy attempts keep their issued terms.
+            $max = (int) ($payment['max_installments'] ?? Domain::installments($registration, $event)['max']);
+            if ($max < 1 || $max > 12) { throw new \RuntimeException('Parcelamento da cobrança inválido.'); }
             $payload['Cartao'] = ['FormaPagamento' => $max > 1 ? ['AVista', 'ParceladoSemJuros'] : ['AVista'], 'QuantidadeParcelas' => $max];
         } else {
             $now = new \DateTimeImmutable('now', new \DateTimeZone($event['timezone']));

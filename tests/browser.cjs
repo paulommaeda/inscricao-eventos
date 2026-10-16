@@ -20,6 +20,7 @@ const event = {
 let account = null, failPayment = false, calls = [], quote = event;
 function makeAccount(method = 'Pix', paid = 10000) {
   return { id: 1, event_id: 1, event_name: event.name, name: 'João', lot: 'Lote 1', method, max_installments: 10,
+    payment_methods: method === 'Pix' ? ['Pix', 'Cartao'] : ['Cartao'], card_installments: { base: 10, max: paid ? 7 : 10, months: paid ? 3 : 0, next_reduction: '2027-02-17' },
     total: 49000, paid, balance: 49000 - paid, overpaid: 0, status: paid === 49000 ? 'paid' : 'partial',
     deadline: event.payment_deadline, message: event.payment_message.replace('{data}', '29/02/2028'), can_pay: paid < 49000,
     payments: paid ? [{ id: 1, amount: paid, credit: paid, method, state: 'paid', created_at: '2026-10-20 12:00:00', url: '' }] : [] };
@@ -75,7 +76,26 @@ function makeAccount(method = 'Pix', paid = 10000) {
   await page.locator('[data-form="pay"] input[name="amount"]').fill('50.00'); await page.locator('[data-form="pay"] button').click();
   await page.waitForURL('https://sandbox.meuk8.com.br/**');
   assert.equal(calls.findLast(c => c.route === '/api/payment').input.amount, '50.00');
+  assert.equal(calls.findLast(c => c.route === '/api/payment').input.method, 'Pix');
   assert.equal(calls.findLast(c => c.route === '/api/payment').csrf, 'browser-test-csrf');
+  // A PIX deposit can finish on card at today's reduced limit, paying only the outstanding amount.
+  account = makeAccount(); await page.goto(base); await page.locator('[data-form="pay"]').waitFor();
+  await page.locator('[data-form="pay"] input[name="amount"]').fill('9999');
+  await page.locator('[data-form="pay"] input[value="Cartao"]').check();
+  assert(await page.locator('.ie-entry').isHidden()); assert.equal(await page.locator('[name="amount"]').getAttribute('required'), null);
+  assert(await page.locator('[name="amount"]').isDisabled(), 'An invalid PIX amount cannot block card settlement');
+  assert.match(await page.locator('.ie-card-terms').textContent(), /até 7x/); assert.match(await page.locator('.ie-card-terms').textContent(), /Limite original do lote: 10x/); assert.match(await page.locator('.ie-card-terms').textContent(), /17\/02\/2027/);
+  assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+  if (artifacts) await page.screenshot({ path: path.join(artifacts, 'balance-card-mobile.png'), fullPage: true });
+  await page.locator('[data-form="pay"] button').click(); await page.waitForURL('https://sandbox.meuk8.com.br/**');
+  assert.deepEqual(calls.findLast(c => c.route === '/api/payment').input, { amount: '390.00', method: 'Cartao', expected_installments: 7 });
+  await page.goto(base + '?ie_return=1&ie_event=1'); await page.locator('.ie-account').waitFor(); assert.equal(await page.locator('.ie-success').count(), 0);
+  // A month change in the API updates the visible limit; 1x has no zero installment option.
+  account.card_installments = { base: 10, max: 1, months: 12, next_reduction: '' };
+  await page.locator('[data-action="refresh"]').click(); await page.locator('[data-form="pay"]').waitFor(); await page.locator('[data-form="pay"] input[value="Cartao"]').check();
+  assert.match(await page.locator('.ie-card-terms').textContent(), /à vista \(1x\)/);
+  // Card is absent from a PIX-only event's allowed methods.
+  account.payment_methods = ['Pix']; await page.goto(base); await page.locator('[data-form="pay"]').waitFor(); assert.equal(await page.locator('[data-form="pay"] input[value="Cartao"]').count(), 0);
   // Card selection sends the entire frozen amount, and the entry input stops being required.
   account = null; await page.goto(base); await page.locator('[data-form="register"]').waitFor();
   await page.locator('input[name="name"]').fill('João Exemplo'); await page.locator('input[name="email"]').fill('joao@example.test');
@@ -95,7 +115,7 @@ function makeAccount(method = 'Pix', paid = 10000) {
   assert.match(await page.locator('.ie-payment-box').textContent(), /Continuar pagamento/);
   // An ambiguous create error leaves a review record, with no additional pay button.
   account = makeAccount(); failPayment = true; await page.goto(base); await page.locator('[data-form="pay"]').waitFor();
-  await page.locator('[data-form="pay"] input').fill('100'); await page.locator('[data-form="pay"] button').click();
+  await page.locator('[data-form="pay"] input[name="amount"]').fill('100'); await page.locator('[data-form="pay"] button').click();
   await page.waitForFunction(() => document.querySelector('.ie-alert')?.textContent.includes('conferência'));
   assert.equal(await page.locator('[data-form="pay"]').count(), 0); assert(await page.locator('[data-action="refresh"]').isEnabled());
   // Cancellation waits for K8 and hides payment actions even if the existing credit covers the total.
@@ -111,5 +131,5 @@ function makeAccount(method = 'Pix', paid = 10000) {
   await page.locator('.ie-tabs [data-tab="lookup"]').click(); assert.equal(await page.locator('[data-form="lookup"]').count(), 1);
   assert.deepEqual(errors, []);
   await browser.close(); server.close();
-  console.log('OK: desktop/mobile, CPF lookup, card total, PIX amount, return without approval, settlement, pending reuse, review recovery and no JS errors.');
+  console.log('OK: desktop/mobile, CPF lookup, PIX deposit + reduced card balance, minimum 1x, method restrictions, return without approval, settlement, pending reuse and no JS errors.');
 })().catch(error => { console.error(error); process.exit(1); });

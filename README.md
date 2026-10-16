@@ -28,12 +28,39 @@ O cartão usa as modalidades à vista e parcelado sem juros do checkout K8. O ev
 ## Fluxo do participante
 
 - **Inscrição:** nome, e-mail, telefone com DDD e CPF válido; escolha da forma de pagamento e aceite das condições.
-- **Cartão:** checkout K8 pelo valor completo, com o limite de parcelas guardado na inscrição. A aprovação confirma a inscrição inteira; as parcelas seguintes pertencem à relação com o emissor do cartão.
+- **Cartão:** checkout K8 pelo valor completo na inscrição ou pelo saldo integral restante depois de pagamentos por PIX, se o cartão estiver habilitado no evento. O limite original do lote é guardado na inscrição e diminui a cada mês completo para novos checkouts. A aprovação confirma a inscrição inteira; as parcelas seguintes pertencem à relação com o emissor do cartão.
 - **PIX:** o participante escolhe a entrada, paga no checkout K8 e acompanha o saldo após a confirmação.
-- **Complementos:** em “Minha inscrição”, informa o CPF, consulta o saldo, escolhe quanto pagar naquele momento e recebe um novo checkout exclusivamente PIX.
-- O lote, seu preço e o limite de parcelas ficam guardados ao criar a inscrição. Mudanças posteriores não reajustam essa inscrição. Complementos continuam disponíveis depois do encerramento das inscrições, até o prazo de quitação.
+- **Complementos:** em “Minha inscrição”, informa o CPF, consulta o saldo, escolhe quanto pagar por PIX ou seleciona **Quitar saldo no cartão**. O cartão paga o saldo completo, já descontando os créditos confirmados, com o limite de parcelas válido na data de emissão do checkout.
+- O lote, seu preço e o limite original de parcelas ficam guardados ao criar a inscrição. Mudanças posteriores não reajustam essa inscrição. Complementos continuam disponíveis depois do encerramento das inscrições, até o prazo de quitação.
 - Há uma inscrição por CPF, evento e conta/ambiente K8. O participante consulta um evento por vez.
 - A mensagem de quitação aparece no cadastro, no saldo e no rodapé. Use `{data}` para incluir a data limite.
+
+## Quitar saldo no cartão e redução mensal (1.3.0)
+
+Na consulta por CPF, uma inscrição iniciada por PIX pode escolher **Continuar com PIX** ou **Quitar saldo no cartão**, conforme os métodos habilitados no evento. O PIX continua aceitando valores parciais; o cartão cobra o saldo integral, sem repetir a entrada nem outros créditos confirmados. Não é necessário editar a inscrição ou alterar sua modalidade para usar o cartão.
+
+O limite de um novo checkout de cartão é:
+
+```text
+máximo de parcelas = máximo(1, limite original do lote − meses completos desde a inscrição)
+```
+
+| Tempo desde a inscrição | Lote 1 (10x) | Lote 2 (8x) | Lote 3 (6x) |
+| --- | --- | --- | --- |
+| No cadastro | 10x | 8x | 6x |
+| Após 1 mês completo | 9x | 7x | 5x |
+| Após 3 meses completos | 7x | 5x | 3x |
+| Após 6 meses completos | 4x | 2x | 1x |
+
+Exemplo: inscrição de R$ 490,00 em 17/10, com R$ 100,00 confirmados por PIX. Em 17/01, o saldo de R$ 390,00 pode ser pago no cartão em até 7x. Um complemento por PIX não reinicia a contagem. O mesmo cálculo vale para todos os lotes e eventos, usando o limite congelado na inscrição, mesmo que o lote seja editado ou renomeado.
+
+A redução acontece no aniversário mensal, no fuso do evento, tomando a data original de cadastro (armazenada em UTC). Inscrição em dia 31 completa o primeiro mês no último dia de fevereiro, inclusive 29/02 em ano bissexto; o aniversário seguinte volta ao dia 31 de março. O mínimo é 1x (à vista), até o prazo de quitação do evento. A tela mostra o limite atual e a próxima redução.
+
+O servidor lê novamente cadastro/saldo, calcula o limite e confere a cotação mostrada antes de emitir o checkout. Campos enviados pelo navegador não aumentam as parcelas nem alteram o valor contratado. Cada nova tentativa guarda seu método real e seu limite; o K8 recebe apenas o saldo e o teto de parcelas calculados. A escolha de uma quantidade menor é feita no checkout K8.
+
+Um checkout já emitido mantém as condições que recebeu; o plugin não altera nem cancela automaticamente links K8 existentes. Enquanto houver tentativa pendente, em criação, conferência ou cancelamento/estorno, outro meio não cria uma segunda cobrança. Conclua/concilie a tentativa ou use as ações administrativas de conferência/cancelamento antes de mudar. A aprovação do cartão quita o saldo apenas após validação pela API K8; callbacks repetidos não duplicam crédito e estorno confirmado reabre somente a parte devolvida.
+
+O dashboard separa **Recebimentos por meio** pelo método efetivo de cada tentativa, permitindo PIX e cartão para a mesma pessoa. Uma inscrição pode aparecer na contagem de recebimentos de ambos os meios; o total de inscrições continua único. Os filtros/colunas **Forma do cadastro** usam a modalidade da inscrição, enquanto a divisão de valores recebidos usa cada pagamento confirmado. Cancelamentos e estornos confirmados saem dos recebimentos correspondentes.
 
 ## Shortcodes e marca
 
@@ -80,8 +107,8 @@ O painel mostra:
 
 - Inscrições, valor contratado, recebido/confirmado, a receber, percentual de quitação, quitadas, parciais e sem pagamento.
 - Dias até o evento, prazo para quitar, situação das inscrições e lote vigente, usando o fuso configurado. Data não configurada aparece como **A definir**; datas passadas são identificadas.
-- Financeiro por lote (nome congelado na inscrição), formas de pagamento, evolução dos cadastros e alertas de conferência, erro, cancelamento/estorno em andamento, excedentes e saldo após o prazo.
-- Filtros por evento, lote, pagamento, método, situação da inscrição, nome/e-mail/CPF completo e período de cadastro. O período inclui os dias completos no fuso do evento; na visão de todos os eventos usa UTC. O gráfico de cadastros usa UTC e os últimos 30 dias com registros.
+- Financeiro por lote (nome congelado na inscrição), recebimentos por meio efetivamente pago, evolução dos cadastros e alertas de conferência, erro, cancelamento/estorno em andamento, excedentes e saldo após o prazo.
+- Filtros por evento, lote, pagamento, forma do cadastro, situação da inscrição, nome/e-mail/CPF completo e período de cadastro. O período inclui os dias completos no fuso do evento; na visão de todos os eventos usa UTC. O gráfico de cadastros usa UTC e os últimos 30 dias com registros.
 - Lista com contatos, valores, saldo, paginação de 25 registros e acesso aos detalhes/edição no WordPress. CSV aplica exatamente os mesmos filtros, incluindo lote, período e contas/ambientes.
 
 Os totais e gráficos correspondem às inscrições filtradas, não apenas à página da tabela. O padrão usa inscrições ativas e a conta/ambiente K8 atual. Cartão aprovado é reconhecido integralmente como confirmado; não é uma demonstração de liquidação bancária ou de taxas do K8. Pagamentos excedentes permanecem destacados e não compensam a dívida de outras pessoas. As datas filtram o cadastro; o financeiro inclui todo o histórico conciliado dessas inscrições. **Atualizar** lê o saldo local conferido, sem emitir cobranças ou solicitar estornos; conciliação permanece nas ações de detalhe, cron e retornos.
@@ -144,13 +171,14 @@ php tests/authentication.php
 php tests/webhook.php
 php tests/management.php
 php tests/dashboard.php
+php tests/installments.php
 npm install
 npx playwright install chromium
 npm test
 python3 scripts/build.py
 ```
 
-Os testes financeiros usam dublês de WordPress/banco/K8 para verificar valores, CPF, limites de lotes, aprovação, estorno, duplicidade, rollback, proteção de origem e separação de ambientes. Os testes de webhook cobrem POST/GET, `ID_BknBank`, JSON/formulário, colisão de parâmetros, tokens, falhas temporárias, correlação e repetição sem duplicar crédito. Incluem GUIDs equivalentes, registros financeiros antigos, divergências por campo, busca exata de pedido após referência não localizada e rejeição de resultados não relacionados. Os testes de gestão verificam edição de CPF sem alterar cobranças antigas, lixeira, autorização, nonces, cancelamento/estorno, timeout e confirmação posterior. Os testes de dashboard executam os SELECTs reais em SQLite com compatibilidade explícita para GREATEST/LIKE, verificando agregações, filtros, fuso, paginação, autorização e remoção completa com rollback. O helper requer Python 3. Os testes de navegador verificam participante, dashboard por shortcode e painel administrativo; o painel usa a renderização e os controladores PHP reais com banco e K8 simulados.
+Os testes financeiros usam dublês de WordPress/banco/K8 para verificar valores, CPF, limites de lotes, aprovação, estorno, duplicidade, rollback, proteção de origem e separação de ambientes. Os testes de webhook cobrem POST/GET, `ID_BknBank`, JSON/formulário, colisão de parâmetros, tokens, falhas temporárias, correlação e repetição sem duplicar crédito. Incluem GUIDs equivalentes, registros financeiros antigos, divergências por campo, busca exata de pedido após referência não localizada e rejeição de resultados não relacionados. Os testes de gestão verificam edição de CPF sem alterar cobranças antigas, lixeira, autorização, nonces, cancelamento/estorno, timeout e confirmação posterior. Os testes de dashboard executam os SELECTs reais em SQLite com compatibilidade explícita para GREATEST/LIKE, verificando agregações, filtros, fuso, paginação, autorização e remoção completa com rollback. O helper requer Python 3. Os testes de parcelamento cobrem todos os lotes, aniversário mensal, meses curtos/bissextos, fuso, mínimo de 1x, cobrança somente do saldo, dados adulterados, bloqueio de meios simultâneos, PIX + cartão, aprovação, repetição de callback e estorno. Os testes de navegador verificam participante, dashboard por shortcode e painel administrativo; o painel usa a renderização e os controladores PHP reais com banco e K8 simulados.
 
 Nenhum teste automatizado cria cobrança real. A versão inicial foi validada localmente com respostas simuladas; instalação no seu WordPress, autorização das credenciais, opções efetivas de parcelamento e callback real precisam de homologação na conta K8.
 

@@ -18,6 +18,7 @@ jobs:
       - run: php tests/webhook.php
       - run: php tests/management.php
       - run: php tests/dashboard.php
+      - run: php tests/installments.php
   browser:
     runs-on: ubuntu-latest
     steps:

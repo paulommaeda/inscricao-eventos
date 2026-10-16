@@ -91,6 +91,7 @@ final class Store
                 scope char(64) NOT NULL,
                 amount bigint NOT NULL,
                 method varchar(10) NOT NULL,
+                max_installments int DEFAULT NULL,
                 cpf_snapshot text DEFAULT NULL,
                 diagnostic_json longtext DEFAULT NULL,
                 checkout_id varchar(100) DEFAULT NULL,
@@ -150,7 +151,7 @@ final class Store
             $engine = $wpdb->get_row($wpdb->prepare('SHOW TABLE STATUS WHERE Name=%s', $table), ARRAY_A);
             if (strtolower($engine['Engine'] ?? '') !== 'innodb') { throw new \RuntimeException('O plugin precisa de tabelas InnoDB para proteger as operações financeiras.'); }
         }
-        foreach (['registrations' => ['status', 'admin_note', 'updated_at', 'deleted_at'], 'payments' => ['cpf_snapshot', 'diagnostic_json', 'remote_id_hint', 'webhook_at', 'webhook_error'], 'transactions' => ['cancel_status', 'cancel_operation', 'cancel_requested_at', 'cancel_error', 'cancel_actor']] as $name => $required) {
+        foreach (['registrations' => ['status', 'admin_note', 'updated_at', 'deleted_at'], 'payments' => ['max_installments', 'cpf_snapshot', 'diagnostic_json', 'remote_id_hint', 'webhook_at', 'webhook_error'], 'transactions' => ['cancel_status', 'cancel_operation', 'cancel_requested_at', 'cancel_error', 'cancel_actor']] as $name => $required) {
             $columns = $wpdb->get_col('SHOW COLUMNS FROM ' . self::table($name));
             if (!is_array($columns) || array_diff($required, $columns)) { throw new \RuntimeException('Não foi possível atualizar as colunas da tabela de ' . $name . '. Confira as permissões do banco.'); }
         }
@@ -216,10 +217,13 @@ final class Store
         $e = self::event((int) $r['event_id']); $today = Domain::today($e);
         $b = self::balance($r);
         $active = ($r['status'] ?? 'active') === 'active';
+        $card = Domain::installments($r, $e); $methods = [];
+        if ($e['allow_pix'] && $r['method'] === 'Pix') { $methods[] = 'Pix'; }
+        if ($e['allow_card']) { $methods[] = 'Cartao'; }
         $payments = array_map(static function ($p) use ($active) {
-            return ['id' => (int) $p['id'], 'amount' => (int) $p['amount'], 'credit' => (int) $p['credit'], 'method' => $p['method'], 'state' => $p['state'], 'created_at' => $p['created_at'], 'url' => $active && $p['state'] === 'pending' ? $p['checkout_url'] : '', 'error' => $p['state'] === 'review' ? 'Pagamento em conferência. Procure a organização antes de tentar novamente.' : ''];
+            return ['id' => (int) $p['id'], 'amount' => (int) $p['amount'], 'credit' => (int) $p['credit'], 'method' => $p['method'], 'max_installments' => isset($p['max_installments']) ? (int) $p['max_installments'] : null, 'state' => $p['state'], 'created_at' => $p['created_at'], 'url' => $active && $p['state'] === 'pending' ? $p['checkout_url'] : '', 'error' => $p['state'] === 'review' ? 'Pagamento em conferência. Procure a organização antes de tentar novamente.' : ''];
         }, self::payments((int) $r['id']));
-        return array_merge($b, ['id' => (int) $r['id'], 'event_id' => (int) $r['event_id'], 'event_name' => $e['name'], 'name' => Domain::firstName($r['name']), 'lot' => $r['lot_name'], 'method' => $r['method'], 'max_installments' => (int) $r['max_installments'], 'deadline' => $e['payment_deadline'], 'message' => str_replace('{data}', Domain::dateBR($e['payment_deadline']), $e['payment_message']), 'registration_status' => $r['status'] ?? 'active', 'payments' => $payments, 'can_pay' => $active && $b['balance'] > 0 && $e['status'] === 'published' && $today <= $e['payment_deadline'] && ($r['method'] === 'Pix' ? (bool) $e['allow_pix'] : (bool) $e['allow_card'])]);
+        return array_merge($b, ['id' => (int) $r['id'], 'event_id' => (int) $r['event_id'], 'event_name' => $e['name'], 'name' => Domain::firstName($r['name']), 'lot' => $r['lot_name'], 'method' => $r['method'], 'max_installments' => (int) $r['max_installments'], 'card_installments' => $card, 'payment_methods' => $methods, 'deadline' => $e['payment_deadline'], 'message' => str_replace('{data}', Domain::dateBR($e['payment_deadline']), $e['payment_message']), 'registration_status' => $r['status'] ?? 'active', 'payments' => $payments, 'can_pay' => $active && $b['balance'] > 0 && $e['status'] === 'published' && !empty($e['payment_deadline']) && $today <= $e['payment_deadline'] && (bool) $methods]);
     }
     public static function sample(): array
     {

@@ -51,7 +51,13 @@ final class Api
         if ($action === 'logout') { Security::logout(); return ['ok' => true]; }
         $r = Security::registration();
         if (!hash_equals($r['scope'], (new Gateway())->scope())) { throw new \RuntimeException('O ambiente de pagamentos mudou. Consulte novamente sua inscrição.'); }
-        if ($action === 'payment') { Security::limit('pay:' . $r['id'], 10, 300); return Payments::create($r, $input['amount'] ?? ''); }
+        if ($action === 'payment') {
+            Security::limit('pay:' . $r['id'], 10, 300);
+            if (isset($input['method']) && !is_string($input['method'])) { throw new \RuntimeException('Forma de pagamento inválida.'); }
+            $expected = $input['expected_installments'] ?? null;
+            if ($expected !== null && (!is_int($expected) || $expected < 1 || $expected > 12)) { throw new \RuntimeException('Confira as condições de parcelamento.'); }
+            return Payments::create($r, $input['amount'] ?? '', $input['method'] ?? null, $expected);
+        }
         if ($action === 'refresh') { Security::limit('refresh:' . $r['id'], 15, 300); Payments::refreshRegistration($r); }
         return Store::publicRegistration($r);
     }

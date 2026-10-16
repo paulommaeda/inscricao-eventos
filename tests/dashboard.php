@@ -42,6 +42,8 @@ foreach (['count' => 4, 'total' => 55000, 'paid' => 37000, 'balance' => 20000, '
 same($m['progress'], 63.6, 'Excess on one registration does not cover another balance');
 $data = Q::dashboard(['event' => $eid]); same(count($data['registrations']), 4, 'Only active current-account registrations');
 same(array_sum(array_column($data['lots'], 'paid')), 37000, 'Lot totals agree with ledger summary'); same(array_sum(array_column($data['methods'], 'balance')), 20000, 'Method totals agree with due summary'); same(array_sum(array_column($data['timeline'], 'count')), 4, 'Timeline counts registrations once');
+same(array_column($data['receipts'], 'paid', 'label'), ['Cartao' => 20000, 'Pix' => 17000], 'Actual receipt methods agree with verified credits');
+same(array_column($data['receipts'], 'count', 'label'), ['Cartao' => 1, 'Pix' => 2], 'Many attempts/transactions count each receiving registration once per method');
 same(in_array('Lote original', $data['lot_options']), true, 'Frozen old lot retained in filter'); same(in_array('Lote renomeado', $data['lot_options']), true, 'Current lot included in filter');
 foreach (['cpf_encrypted', 'cpf_hash', 'cpf_snapshot', 'terms_snapshot', 'admin_note', 'scope'] as $field) same(array_key_exists($field, $data['registrations'][0]), false, 'Dashboard rows omit ' . $field);
 same(str_contains(json_encode($data), '52998224725'), false, 'No full document in dashboard listing');

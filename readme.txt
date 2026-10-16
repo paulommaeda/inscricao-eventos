@@ -2,7 +2,7 @@
 Contributors: paulommaeda
 Requires at least: 6.4
 Requires PHP: 8.1
-Stable tag: 1.2.0
+Stable tag: 1.3.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -14,6 +14,14 @@ Use [inscricao_eventos evento="1"] em uma página. A ativação cria o modelo do
 Use [inscricao_eventos_dashboard evento="1"] para o dashboard privado da organização.
 
 == Changelog ==
+= 1.3.0 =
+* Inscrições iniciadas por PIX podem quitar o saldo restante no cartão habilitado no evento.
+* Limite do lote reduz uma parcela a cada mês completo desde a inscrição, até o mínimo de 1x.
+* Cálculo no fuso do evento, aniversários mensais, meses curtos e anos bissextos.
+* Saldo integral, limite conferido no servidor e condições guardadas em cada nova cobrança.
+* Recebimentos por meio efetivamente pago no dashboard, incluindo PIX + cartão na mesma inscrição.
+* Testes de parcelamento, pagamento misto, callbacks, estorno, limites e interface móvel.
+
 = 1.2.0 =
 * Exclusão permanente de inscrições com pagamentos e de eventos com todos os registros vinculados.
 * Confirmação digitada por ID, transação de banco, bloqueios e remoção completa de dados locais.
