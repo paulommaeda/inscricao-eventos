@@ -22,7 +22,9 @@ if ($saved) {
     $rid = S::insert('registrations', ['event_id' => $eid, 'scope' => $scope, 'lot_id' => 1, 'lot_name' => 'Lote 1', 'total' => 49000, 'max_installments' => 10, 'method' => 'Pix', 'name' => 'João Teste', 'email' => 'joao@example.test', 'phone' => '41999999999', 'cpf_hash' => C::hash('cpf:52998224725'), 'cpf_encrypted' => C::seal('52998224725'), 'terms_snapshot' => 'Condições de teste', 'terms_accepted_at' => current_time('mysql', true), 'created_at' => current_time('mysql', true)]);
     $pid = S::insert('payments', ['registration_id' => $rid, 'scope' => $scope, 'reference' => 'IE-uifixture', 'cpf_snapshot' => C::seal('52998224725'), 'amount' => 5000, 'method' => 'Pix', 'checkout_id' => 'checkout-uifixture', 'checkout_url' => 'https://sandbox.meuk8.com.br/PagamentosUI/checkout?id=mock', 'state' => 'pending', 'last_error' => '', 'operator_note' => '']);
     $payload = ['Retorno' => 'OK', 'Identificador' => 'ui-transaction', 'Referencia' => 'IE-uifixture', 'NumeroPedido' => 'IE-uifixture', 'ClienteCPFCNPJ' => '52998224725', 'Tipo' => 'Pix', 'Valor' => 50, 'ValorPago' => 50, 'Estado' => 'Aprovada'];
-    P::applyVerified(S::payment($pid), S::registration($rid), $payload, 'ui-transaction');
+    if (getenv('IE_ADMIN_K8_MANUAL') === '1') {
+        S::update('payments', ['state' => 'review', 'last_error' => 'K8 indisponível (HTTP 503). Falha na sincronização.', 'webhook_error' => 'Retorno não conciliado.'], ['id' => $pid]);
+    } else { P::applyVerified(S::payment($pid), S::registration($rid), $payload, 'ui-transaction'); }
     S::update('payments', ['remote_id_hint' => 'ui-transaction'], ['id' => $pid]);
 }
 register_shutdown_function(static function () use ($stateFile, $wpdb) { file_put_contents($stateFile, json_encode(['rows' => $wpdb->rows, 'options' => $GLOBALS['test_options'], 'transients' => $GLOBALS['test_transients'], 'calls' => $GLOBALS['http_calls']])); });
@@ -36,7 +38,7 @@ try {
             $GLOBALS['http_queue'][] = ['code' => 200, 'body' => json_encode($data)];
             if ($action === 'ie_cancel_payment') { $GLOBALS['http_queue'][] = ['code' => 200, 'body' => '{"Retorno":"OK","Posterior":false}']; $data['Estado'] = 'Estornado'; $GLOBALS['http_queue'][] = ['code' => 200, 'body' => json_encode($data)]; }
         }
-        $handlers = ['ie_save_registration' => 'saveRegistration', 'ie_registration_action' => 'registrationAction', 'ie_cancel_payment' => 'cancelPayment', 'ie_sync_payment' => 'syncPayment', 'ie_review_cancellation' => 'reviewCancellation', 'ie_delete_event' => 'deleteEvent', 'ie_manual_payment' => 'manualPayment', 'ie_reverse_manual' => 'reverseManual', 'ie_export' => 'export'];
+        $handlers = ['ie_save_registration' => 'saveRegistration', 'ie_registration_action' => 'registrationAction', 'ie_cancel_payment' => 'cancelPayment', 'ie_sync_payment' => 'syncPayment', 'ie_review_cancellation' => 'reviewCancellation', 'ie_delete_event' => 'deleteEvent', 'ie_manual_payment' => 'manualPayment', 'ie_link_manual_k8' => 'linkManualK8', 'ie_reverse_manual' => 'reverseManual', 'ie_export' => 'export'];
         if (!isset($handlers[$action])) throw new RuntimeException('Unsupported fixture action');
         A::{$handlers[$action]}(); return;
     }

@@ -128,6 +128,7 @@ final class Store
             'manuals' => "id bigint unsigned NOT NULL AUTO_INCREMENT,
                 registration_id bigint unsigned NOT NULL,
                 payment_id bigint unsigned NOT NULL DEFAULT 0,
+                remote_id varchar(100) NOT NULL DEFAULT '',
                 amount bigint NOT NULL,
                 method varchar(20) NOT NULL,
                 paid_on varchar(10) NOT NULL,
@@ -170,7 +171,7 @@ final class Store
             $engine = $wpdb->get_row($wpdb->prepare('SHOW TABLE STATUS WHERE Name=%s', $table), ARRAY_A);
             if (strtolower($engine['Engine'] ?? '') !== 'innodb') { throw new \RuntimeException('O plugin precisa de tabelas InnoDB para proteger as operações financeiras.'); }
         }
-        foreach (['registrations' => ['status', 'admin_note', 'updated_at', 'deleted_at'], 'payments' => ['max_installments', 'cpf_snapshot', 'diagnostic_json', 'remote_id_hint', 'webhook_at', 'webhook_error'], 'manuals' => ['registration_id', 'payment_id', 'request_key', 'reversed_at', 'resolved_at'], 'transactions' => ['cancel_status', 'cancel_operation', 'cancel_requested_at', 'cancel_error', 'cancel_actor']] as $name => $required) {
+        foreach (['registrations' => ['status', 'admin_note', 'updated_at', 'deleted_at'], 'payments' => ['max_installments', 'cpf_snapshot', 'diagnostic_json', 'remote_id_hint', 'webhook_at', 'webhook_error'], 'manuals' => ['registration_id', 'payment_id', 'remote_id', 'request_key', 'reversed_at', 'resolved_at'], 'transactions' => ['cancel_status', 'cancel_operation', 'cancel_requested_at', 'cancel_error', 'cancel_actor']] as $name => $required) {
             $columns = $wpdb->get_col('SHOW COLUMNS FROM ' . self::table($name));
             if (!is_array($columns) || array_diff($required, $columns)) { throw new \RuntimeException('Não foi possível atualizar as colunas da tabela de ' . $name . '. Confira as permissões do banco.'); }
         }
@@ -260,7 +261,7 @@ final class Store
         if ($e['allow_pix'] && $r['method'] === 'Pix') { $methods[] = 'Pix'; }
         if ($e['allow_card']) { $methods[] = 'Cartao'; }
         $payments = array_map(static function ($p) use ($active, $b) {
-            return ['id' => (int) $p['id'], 'amount' => (int) $p['amount'], 'credit' => (int) $p['credit'], 'method' => $p['method'], 'manual_credit' => (int) $p['manual_credit'], 'max_installments' => isset($p['max_installments']) ? (int) $p['max_installments'] : null, 'state' => $p['state'], 'created_at' => $p['created_at'], 'url' => $active && $p['state'] === 'pending' && !$p['manual_credit'] && (int) $p['amount'] <= $b['balance'] ? $p['checkout_url'] : '', 'error' => $p['state'] === 'review' ? 'Pagamento em conferência. Procure a organização antes de tentar novamente.' : ''];
+            return ['id' => (int) $p['id'], 'amount' => (int) $p['amount'], 'credit' => (int) $p['credit'], 'method' => $p['method'], 'manual_credit' => (int) $p['manual_credit'], 'manual_settled' => Manual::settled($p), 'max_installments' => isset($p['max_installments']) ? (int) $p['max_installments'] : null, 'state' => $p['state'], 'created_at' => $p['created_at'], 'url' => $active && $p['state'] === 'pending' && !$p['manual_credit'] && (int) $p['amount'] <= $b['balance'] ? $p['checkout_url'] : '', 'error' => $p['state'] === 'review' && !Manual::settled($p) ? 'Pagamento em conferência. Procure a organização antes de tentar novamente.' : ''];
         }, self::payments((int) $r['id']));
         $manuals = array_map(static fn($m) => ['id' => (int) $m['id'], 'payment_id' => (int) $m['payment_id'], 'amount' => (int) $m['amount'], 'method' => $m['method'], 'paid_on' => $m['paid_on'], 'status' => !empty($m['reversed_at']) ? 'reversed' : (!empty($m['resolved_at']) ? 'reconciled' : 'active')], self::manuals((int) $r['id']));
         return array_merge($b, ['id' => (int) $r['id'], 'event_id' => (int) $r['event_id'], 'event_name' => $e['name'], 'name' => Domain::firstName($r['name']), 'lot' => $r['lot_name'], 'method' => $r['method'], 'max_installments' => (int) $r['max_installments'], 'card_installments' => $card, 'payment_methods' => $methods, 'deadline' => $e['payment_deadline'], 'message' => str_replace('{data}', Domain::dateBR($e['payment_deadline']), $e['payment_message']), 'registration_status' => $r['status'] ?? 'active', 'payments' => $payments, 'manual_payments' => $manuals, 'can_pay' => $active && $b['balance'] > 0 && $e['status'] === 'published' && !empty($e['payment_deadline']) && $today <= $e['payment_deadline'] && (bool) $methods]);

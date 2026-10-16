@@ -60,7 +60,7 @@
         <button type="submit" class="ie-btn">Pagar agora →</button></form>`;
     }
     function accountView(a) {
-      const outstanding = a.payments.find(p => ['pending', 'review', 'creating', 'canceling'].includes(p.state));
+      const outstanding = a.payments.find(p => ['pending', 'review', 'creating', 'canceling'].includes(p.state) && (p.state === 'canceling' || !p.manual_settled));
       const labels = { pending: 'Aguardando confirmação', creating: 'Preparando pagamento', review: 'Em conferência', paid: 'Confirmado', closed: 'Encerrado', canceling: 'Cancelamento / estorno em andamento' };
       let pay = '';
       if (a.registration_status && a.registration_status !== 'active') pay = `<div class="ie-deadline"><b>${a.registration_status === 'deleted' ? 'Inscrição excluída' : 'Inscrição cancelada'}</b><p>Entre em contato com a organização para conferir a inscrição e seus pagamentos.</p></div>`;

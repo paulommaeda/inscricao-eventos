@@ -24,6 +24,7 @@ final class Admin
         add_action('admin_post_ie_cancel_payment', [self::class, 'cancelPayment']);
         add_action('admin_post_ie_review_cancellation', [self::class, 'reviewCancellation']);
         add_action('admin_post_ie_manual_payment', [self::class, 'manualPayment']);
+        add_action('admin_post_ie_link_manual_k8', [self::class, 'linkManualK8']);
         add_action('admin_post_ie_reverse_manual', [self::class, 'reverseManual']);
         add_action('admin_post_ie_export', [self::class, 'export']);
         add_action('admin_enqueue_scripts', static function ($hook) {
@@ -261,10 +262,11 @@ final class Admin
             echo '<p><a href="' . esc_url(admin_url('admin.php?page=ie-dashboard')) . '">← Inscrições</a></p><div class="ie-panel"><h2>' . esc_html($r['name']) . ' — #' . $id . '</h2><div class="ie-form-grid">';
             foreach (['CPF' => Security::unseal($r['cpf_encrypted']), 'E-mail' => $r['email'], 'Telefone' => $r['phone'], 'Evento' => $event['name'], 'Lote' => $r['lot_name'], 'Conta / ambiente (referência)' => substr($r['scope'], 0, 12), 'Forma do cadastro' => $r['method'] === 'Pix' ? 'PIX' : 'Cartão', 'Limite original do lote' => $r['max_installments'] . 'x', 'Cartão para quitar hoje' => Domain::installments($r, $event)['max'] . 'x', 'Total' => Domain::money($b['total']), 'Recebido' => Domain::money($b['paid']), 'Confirmado no K8' => Domain::money($b['gateway_paid']), 'Baixa manual ativa' => Domain::money($b['manual_paid']), 'Saldo' => Domain::money($b['balance']), 'Excedente' => Domain::money($b['overpaid']), 'Aceite (UTC)' => $r['terms_accepted_at']] as $label => $value) { echo '<div><b>' . esc_html($label) . '</b><p>' . esc_html($value) . '</p></div>'; }
             echo '</div><details><summary>Condições aceitas</summary><div>' . wp_kses_post(nl2br($r['terms_snapshot'])) . '</div></details></div>';
-            self::manualHistory($r, $b); echo '<h2>Histórico de pagamentos K8</h2>';
+            echo '<h2>Histórico de pagamentos K8</h2><p>Para reconhecer um pagamento K8 com falha de sincronização, use <strong>Dar baixa manual da transação K8</strong> na cobrança correspondente. Recebimentos externos ficam ao final da página.</p>';
             foreach (Store::payments($id) as $p) {
                 echo '<div class="ie-panel"><h3>Tentativa #' . (int) $p['id'] . ' — ' . esc_html(Domain::money((int) $p['amount'])) . '</h3>' . ($p['method'] === 'Cartao' && isset($p['max_installments']) ? '<p>Limite de parcelas deste checkout: <strong>' . (int) $p['max_installments'] . 'x</strong>.</p>' : '') . '<p>Estado: <strong>' . esc_html(['pending' => 'Aguardando pagamento/retorno', 'creating' => 'Criando checkout', 'review' => 'Em conferência', 'paid' => 'Confirmado', 'closed' => 'Encerrado', 'canceling' => 'Cancelamento / estorno em conferência'][$p['state']] ?? $p['state']) . '</strong> · Crédito: ' . esc_html(Domain::money((int) $p['credit'])) . '</p><p>Referência: <code>' . esc_html($p['reference']) . '</code><br>Checkout K8: <code>' . esc_html($p['checkout_id'] ?? 'Não retornado') . '</code><br>Conferido em (UTC): ' . esc_html($p['synced_at'] ?? 'Ainda não conferido') . '</p>';
                 echo '<p>Crédito confirmado K8: <strong>' . esc_html(Domain::money((int) $p['gateway_credit'])) . '</strong> · Crédito manual ativo: <strong>' . esc_html(Domain::money((int) $p['manual_credit'])) . '</strong>.</p>';
+                if ((int) $p['manual_credit'] > 0) { echo '<p class="ie-k8-manual-status"><strong>Baixada manualmente · aguardando sincronização K8</strong><br>O saldo já considera este recebimento. A confirmação posterior substituirá o crédito manual, sem somar novamente.</p>'; }
                 if ($p['last_error']) { echo '<p class="ie-error">' . esc_html($p['last_error']) . '</p>'; }
                 echo '<p>Último retorno K8 (UTC): ' . esc_html($p['webhook_at'] ?? 'Ainda não recebido') . '<br>Identificador para conciliação: <code>' . esc_html($p['remote_id_hint'] ?? '') . '</code></p>';
                 if (!empty($p['webhook_error'])) { echo '<p class="ie-error">Falha no retorno: ' . esc_html($p['webhook_error']) . '</p>'; }
@@ -286,6 +288,7 @@ final class Admin
                     echo '<p><button class="button ie-confirm" name="mode" value="close" data-confirm="A conferência no K8 foi concluída e os links antigos foram desativados?">Liberar nova tentativa</button></p></form></details>';
                 }
             }
+            self::manualHistory($r, $b);
             $audit = Store::auditRows($id);
             if ($audit) { echo '<details class="ie-panel"><summary>Histórico administrativo</summary><div class="ie-table-wrap"><table class="widefat"><thead><tr><th>Data UTC</th><th>Usuário WP</th><th>Ação</th><th>Registro</th></tr></thead><tbody>'; foreach ($audit as $a) { echo '<tr><td>' . esc_html($a['created_at']) . '</td><td>#' . (int) $a['actor_id'] . '</td><td>' . esc_html($a['action']) . '</td><td class="ie-wrap-cell">' . esc_html($a['note']) . '</td></tr>'; } echo '</tbody></table></div></details>'; }
         } catch (\Throwable $e) { echo '<p>' . esc_html($e->getMessage()) . '</p>'; }
@@ -306,31 +309,48 @@ final class Admin
     }
     private static function manualForm(array $r, ?array $p, array $balance): void
     {
-        if (!Access::canManage() || ($r['status'] ?? 'active') !== 'active' || !$balance['balance']) { return; }
-        $paymentId = $p ? (int) $p['id'] : 0; $max = $balance['balance'];
+        if (!Access::canManage()) { return; }
+        if (($r['status'] ?? 'active') !== 'active') { if ($p) { echo '<p class="ie-manual-unavailable">Ative/restaure a inscrição para dar baixa manual nesta cobrança K8.</p>'; } return; }
+        $paymentId = $p ? (int) $p['id'] : 0; $max = $balance['balance']; $remoteId = ''; $candidates = [];
         if ($p) {
-            if ($p['state'] === 'canceling' || (int) $p['credit'] >= (int) $p['amount']) { return; }
-            foreach (Store::manuals((int) $r['id']) as $m) { if ((int) $m['payment_id'] === $paymentId && Manual::active($m)) { return; } }
-            foreach (Store::transactions($paymentId) as $tx) { if (Domain::terminal($tx['remote_state'])) { return; } }
+            $rows = Store::manuals((int) $r['id']); $transactions = Store::transactions($paymentId);
+            $remoteId = (string) ($p['remote_id_hint'] ?? ''); if (!$remoteId && count($transactions) === 1) { $remoteId = $transactions[0]['remote_id']; }
+            if ($remoteId !== '') { try { $remoteId = Domain::remoteId($remoteId); } catch (\Throwable $e) { $remoteId = ''; } }
+            $block = Manual::k8Block($p, $rows, $transactions, $remoteId);
+            if ($block !== '') { echo '<p class="ie-manual-unavailable">Baixa manual K8: ' . esc_html($block) . '</p>'; return; }
+            if (!(int) $p['gateway_credit']) {
+                foreach ($rows as $m) { if (!(int) $m['payment_id'] && Manual::active($m) && $m['method'] === $p['method'] && (int) $m['amount'] <= (int) $p['amount']) { $candidates[] = $m; } }
+            }
             $max = min((int) $p['amount'], $max + (int) $p['gateway_credit']);
-        }
+            if (!$max && !$candidates) { echo '<p class="ie-manual-unavailable">Baixa manual K8: a inscrição está sem saldo a receber. Confira os recebimentos já registrados no histórico.</p>'; return; }
+        } elseif (!$max) { return; }
         $e = Store::event((int) $r['event_id']);
-        echo '<details class="ie-manual-panel"><summary>' . ($p ? 'Baixa manual desta tentativa K8' : 'Registrar recebimento fora do K8') . '</summary><p>' . ($p ? 'Reconheça provisoriamente o valor pago nesta cobrança, após conferir o comprovante. O estado final consultado na API K8 substituirá esta baixa, inclusive em rejeição/estorno. Use o recebimento fora do K8 para dinheiro ou outro pagamento externo.' : 'Registre um pagamento efetivamente recebido fora desta integração. Ele será identificado como baixa manual e não altera transações do K8. Para uma cobrança K8 aguardando retorno, use a baixa vinculada à respectiva tentativa para evitar duplicidade.') . '</p>';
+        echo '<details class="ie-manual-panel' . ($p ? ' ie-k8-manual' : '') . '"' . ($p ? ' id="ie-k8-manual-' . $paymentId . '"' . (!empty($p['last_error']) || !empty($p['webhook_error']) ? ' open' : '') : '') . '><summary>' . ($p ? 'Dar baixa manual da transação K8' : 'Registrar recebimento fora do K8') . '</summary><p>' . ($p ? 'Use quando o pagamento desta cobrança foi recebido no K8, mas a sincronização falhou. A baixa atualiza o saldo no WordPress sem depender de uma consulta K8. Confira o comprovante e informe o ID da transação, se disponível. O estado final verificado pela API substituirá a baixa provisória, inclusive em rejeição/estorno.' : 'Registre um pagamento efetivamente recebido fora desta integração. Ele será identificado como baixa manual. Para um pagamento feito no K8 com retorno atrasado, use a baixa da respectiva cobrança no histórico K8 acima.') . '</p>';
+        if ($p && $candidates) {
+            echo '<h4>Já registrou este mesmo pagamento como baixa manual?</h4><p>Vincule o registro existente a esta cobrança K8 para evitar duplicidade quando o retorno chegar. O valor e o saldo permanecem iguais.</p>';
+            self::form('ie_link_manual_k8', ['registration_id' => $r['id'], 'payment_id' => $paymentId]); echo '<div class="ie-form-grid"><label class="ie-field"><span>Baixa já registrada</span><select name="manual_id" required>';
+            foreach ($candidates as $m) { echo '<option value="' . (int) $m['id'] . '">#' . (int) $m['id'] . ' · ' . esc_html(Domain::money((int) $m['amount']) . ' · ' . Domain::dateBR($m['paid_on'])) . '</option>'; }
+            echo '</select></label>'; self::input('remote_id', 'ID da transação K8 (opcional)', $remoteId, 'text', 'pattern="[A-Za-z0-9-]{1,100}" maxlength="100"'); self::input('note', 'Motivo / comprovante do vínculo', '', 'text', 'minlength="3" maxlength="1000" required'); echo '</div>';
+            self::check('confirmed', 'Conferi que esta baixa e esta transação K8 representam o mesmo pagamento.', false);
+            echo '<p><button class="button ie-confirm" data-confirm="Vincular a baixa existente a esta cobrança, sem adicionar crédito?">Vincular baixa existente ao K8</button></p></form>';
+        }
+        if (!$max) { echo '</details>'; return; }
+        if ($p && $candidates) { echo '<h4>Registrar outro recebimento desta cobrança</h4><p>Use somente se este pagamento ainda não foi lançado acima.</p>'; }
         self::form('ie_manual_payment', ['registration_id' => $r['id'], 'payment_id' => $paymentId, 'request_token' => bin2hex(random_bytes(32))]); echo '<div class="ie-form-grid">';
-        self::input('amount', $p ? 'Valor pago total nesta tentativa (R$)' : 'Valor recebido (R$)', number_format($max / 100, 2, '.', ''), 'number', 'min="0.01" max="' . number_format($max / 100, 2, '.', '') . '" step="0.01" required');
+        self::input('amount', $p ? 'Valor pago total nesta cobrança K8 (R$)' : 'Valor recebido (R$)', number_format($max / 100, 2, '.', ''), 'number', 'min="0.01" max="' . number_format($max / 100, 2, '.', '') . '" step="0.01" required');
         self::input('paid_on', 'Data do pagamento', Domain::today($e), 'date', 'max="' . Domain::today($e) . '" required');
-        if ($p) { echo '<div><b>Meio da tentativa</b><p>' . esc_html(Manual::METHODS[$p['method']] ?? $p['method']) . '</p></div>'; }
+        if ($p) { self::input('remote_id', 'ID da transação K8 (opcional)', $remoteId, 'text', 'pattern="[A-Za-z0-9-]{1,100}" maxlength="100"'); echo '<div><b>Meio da cobrança</b><p>' . esc_html(Manual::METHODS[$p['method']] ?? $p['method']) . '</p></div>'; }
         else { echo '<label class="ie-field"><span>Meio do recebimento</span><select name="method">'; foreach (Manual::METHODS as $value => $label) { echo '<option value="' . esc_attr($value) . '">' . esc_html($label) . '</option>'; } echo '</select></label>'; }
         self::input('note', 'Motivo / identificação do comprovante', '', 'text', 'minlength="3" maxlength="1000" required'); echo '</div>';
         self::check('confirmed', 'Conferi o recebimento e confirmo esta baixa manual. Ela não cancela links nem solicita estorno no K8.', false);
-        echo '<p><button class="button button-primary ie-confirm" data-confirm="Registrar este crédito manual no saldo da inscrição?">Registrar baixa manual</button></p></form></details>';
+        echo '<p><button class="button button-primary ie-confirm" data-confirm="Registrar este crédito manual no saldo da inscrição?">' . ($p ? 'Confirmar baixa da transação K8' : 'Registrar baixa manual') . '</button></p></form></details>';
     }
     private static function manualHistory(array $r, array $balance): void
     {
         echo '<div class="ie-panel"><h2>Baixas manuais</h2><p>Crédito manual ativo: <strong>' . esc_html(Domain::money($balance['manual_paid'])) . '</strong>. Histórico preservado em reversões e conciliações.</p>';
         foreach (Store::manuals((int) $r['id']) as $m) {
             $status = !empty($m['reversed_at']) ? 'Revertida' : (!empty($m['resolved_at']) ? 'Substituída pela conciliação K8: ' . $m['resolved_state'] : 'Ativa');
-            echo '<article class="ie-manual-entry"><h3>Baixa #' . (int) $m['id'] . ' · ' . esc_html(Domain::money((int) $m['amount']) . ' · ' . (Manual::METHODS[$m['method']] ?? $m['method'])) . '</h3><p>' . esc_html($status) . ' · Pagamento em ' . esc_html(Domain::dateBR($m['paid_on'])) . '<br>' . ((int) $m['payment_id'] ? 'Vinculada à tentativa K8 #' . (int) $m['payment_id'] : 'Recebimento fora do K8') . '<br>Registrada por usuário WP #' . (int) $m['actor_id'] . ' em ' . esc_html($m['created_at']) . ' UTC.</p><p>' . esc_html($m['note']) . '</p>';
+            echo '<article class="ie-manual-entry"><h3>Baixa #' . (int) $m['id'] . ' · ' . esc_html(Domain::money((int) $m['amount']) . ' · ' . (Manual::METHODS[$m['method']] ?? $m['method'])) . '</h3><p>' . esc_html($status) . ' · Pagamento em ' . esc_html(Domain::dateBR($m['paid_on'])) . '<br>' . ((int) $m['payment_id'] ? 'Vinculada à cobrança K8 #' . (int) $m['payment_id'] : 'Recebimento fora do K8') . (!empty($m['remote_id']) ? '<br>Transação K8: <code>' . esc_html($m['remote_id']) . '</code>' : '') . '<br>Registrada por usuário WP #' . (int) $m['actor_id'] . ' em ' . esc_html($m['created_at']) . ' UTC.</p><p>' . esc_html($m['note']) . '</p>';
             if (!empty($m['reversed_at'])) { echo '<p>Reversão por usuário WP #' . (int) $m['reversed_by'] . ' em ' . esc_html($m['reversed_at']) . ' UTC: ' . esc_html($m['reverse_note']) . '</p>'; }
             if (Access::canManage() && Manual::active($m)) {
                 echo '<details><summary>Reverter esta baixa manual</summary>'; self::form('ie_reverse_manual', ['registration_id' => $r['id'], 'manual_id' => $m['id']]); self::input('note', 'Motivo da reversão', '', 'text', 'required minlength="3" maxlength="1000"'); self::check('confirmed', 'Confirmo a reversão do crédito local. Esta ação não devolve dinheiro nem solicita estorno ao K8.', false);
@@ -354,6 +374,14 @@ final class Admin
             if ((int) $m['registration_id'] !== $id) { throw new \RuntimeException('Esta baixa não pertence à inscrição.'); }
             Manual::reverse((int) $m['id'], (string) wp_unslash($_POST['note'] ?? ''), !empty($_POST['confirmed']));
             self::redirect('ie-dashboard', 'Baixa manual revertida. O histórico foi preservado e o K8 não recebeu solicitação de estorno.', false, ['view' => $id]);
+        } catch (\Throwable $e) { self::redirect('ie-dashboard', $e->getMessage(), true, ['view' => $id]); }
+    }
+    public static function linkManualK8(): void
+    {
+        self::guard('ie_link_manual_k8'); $id = absint($_POST['registration_id'] ?? 0);
+        try {
+            Manual::linkK8($id, absint($_POST['payment_id'] ?? 0), absint($_POST['manual_id'] ?? 0), (array) wp_unslash($_POST));
+            self::redirect('ie-dashboard', 'Baixa existente vinculada à cobrança K8. O saldo foi preservado, sem novo crédito.', false, ['view' => $id]);
         } catch (\Throwable $e) { self::redirect('ie-dashboard', $e->getMessage(), true, ['view' => $id]); }
     }
     private static function editRegistration(int $id): void

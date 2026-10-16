@@ -133,6 +133,14 @@ function makeAccount(method = 'Pix', paid = 10000) {
   assert.equal(await page.getByRole('button', { name: /Registrar baixa|Reverter baixa/ }).count(), 0);
   account.paid = 0; account.balance = 49000; account.can_pay = true; account.manual_paid = 0; account.manual_payments[0].status = 'reversed';
   await page.locator('[data-action="refresh"]').click(); await page.locator('[data-form="pay"]').waitFor(); assert.match(await page.locator('.ie-history').textContent(), /Revertida/);
+  // A manually settled K8 entry releases the remaining balance, while partial recognition does not.
+  account = makeAccount('Pix', 10000); account.manual_paid = 10000; account.gateway_paid = 0;
+  account.payments = [{ id: 7, amount: 10000, credit: 10000, manual_credit: 10000, manual_settled: true, state: 'review', method: 'Pix', created_at: '2026-10-20 12:00:00', url: '' }];
+  await page.goto(base); await page.locator('[data-form="pay"]').waitFor(); assert.match(await page.locator('.ie-history').textContent(), /Baixa manual · K8 em conferência/);
+  await page.locator('[data-form="pay"] input[value="Cartao"]').check(); assert.match(await page.locator('.ie-card-terms').textContent(), /390,00/);
+  account.payments[0].manual_settled = false; account.payments[0].manual_credit = 5000;
+  await page.locator('[data-action="refresh"]').click(); await page.waitForFunction(() => !document.querySelector('[data-form="pay"]'));
+  assert.equal(await page.locator('[data-form="pay"]').count(), 0);
   // Unknown dates keep registrations closed while the CPF consultation remains available.
   account = null; quote = { ...event, active_lot: null, open: false, event_date: '', notice: 'Prévia: defina a data do evento.' };
   await page.goto(base); await page.locator('.ie-notice').waitFor(); assert.equal(await page.locator('[data-form="register"]').count(), 0);

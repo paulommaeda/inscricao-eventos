@@ -2,7 +2,7 @@
 Contributors: paulommaeda
 Requires at least: 6.4
 Requires PHP: 8.1
-Stable tag: 1.4.0
+Stable tag: 1.4.1
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -14,6 +14,14 @@ Use [inscricao_eventos evento="1"] em uma página. A ativação cria o modelo do
 Use [inscricao_eventos_dashboard evento="1"] para o dashboard privado da organização.
 
 == Changelog ==
+= 1.4.1 =
+* Ação destacada para dar baixa manual da própria transação K8 quando a sincronização falhar, com painel aberto nas falhas e motivo de indisponibilidade visível.
+* ID K8 opcional preservado no histórico e usado como pista para a próxima consulta verificada; nenhuma chamada K8 é necessária para a baixa manual.
+* Vínculo de uma baixa externa já registrada à mesma cobrança K8, mantendo valor, data, responsável e saldo, sem novo crédito.
+* Resultado de outra transação rejeitada do mesmo checkout não elimina uma baixa vinculada a ID diferente.
+* Entrada K8 integralmente baixada manualmente libera pagamentos do saldo restante sem repetir a entrada; baixas parciais e cancelamentos em andamento continuam bloqueando outra cobrança.
+* Testes de API indisponível, retorno tardio, vínculo de recebimento existente, reversão, permissões e interface móvel.
+
 = 1.4.0 =
 * Baixa manual e reversão exclusivas de administradores, com valor, data, meio, comprovante/motivo e histórico do responsável.
 * Recebimentos externos e baixas provisórias vinculadas a tentativas K8, sem transações fictícias nem crédito duplicado no retorno.

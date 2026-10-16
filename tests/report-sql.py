@@ -30,7 +30,7 @@ fields = {
     'events': 'id name timezone',
     'registrations': 'id event_id scope lot_id lot_name total max_installments method status admin_note updated_at deleted_at name email phone cpf_hash cpf_encrypted terms_snapshot terms_accepted_at created_at',
     'payments': 'id registration_id reference scope amount method cpf_snapshot diagnostic_json checkout_id checkout_url remote_id_hint webhook_at webhook_error state last_error operator_note created_at synced_at',
-    'manuals': 'id registration_id payment_id amount method paid_on note request_key actor_id created_at reversed_at reversed_by reverse_note resolved_at resolved_state',
+    'manuals': 'id registration_id payment_id remote_id amount method paid_on note request_key actor_id created_at reversed_at reversed_by reverse_note resolved_at resolved_state',
     'transactions': 'id payment_id scope remote_id remote_state credit paid_at synced_at cancel_status cancel_operation cancel_requested_at cancel_error cancel_actor',
 }
 numeric = {'id', 'event_id', 'registration_id', 'payment_id', 'total', 'amount', 'credit', 'lot_id', 'max_installments', 'cancel_actor', 'actor_id', 'reversed_by'}

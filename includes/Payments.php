@@ -52,6 +52,7 @@ final class Payments
             if ($method === 'Cartao' && $cents !== $balance['balance']) { throw new \RuntimeException('O cartão deve pagar o saldo completo; o parcelamento será escolhido no K8.'); }
             foreach (Store::payments((int) $registration['id']) as $old) {
                 if (!in_array($old['state'], ['creating', 'pending', 'review', 'canceling'], true)) { continue; }
+                if (Manual::settled($old)) { continue; }
                 if ($old['state'] === 'pending' && $old['method'] === $method && $old['checkout_url'] && (int) $old['amount'] === $cents) { return ['payment_id' => (int) $old['id'], 'url' => Security::gatewayURL($old['checkout_url'])]; }
                 throw new \RuntimeException('Há um pagamento em andamento. Confira ou conclua essa tentativa antes de gerar outra.');
             }
@@ -226,7 +227,11 @@ final class Payments
             } else {
                 $rows = $wpdb->get_results($wpdb->prepare('SELECT * FROM ' . Store::table('transactions') . ' WHERE payment_id=%d', $paymentId), ARRAY_A);
                 if ($rows === null || !empty($wpdb->last_error)) { throw new \RuntimeException('Não foi possível conferir as transações já vinculadas.'); }
-                $ids = array_column($rows, 'remote_id');
+                $ids = [];
+                foreach (Store::manuals((int) $r['id']) as $manual) {
+                    if ((int) $manual['payment_id'] === $paymentId && Manual::active($manual) && !empty($manual['remote_id'])) { $ids[] = $manual['remote_id']; }
+                }
+                $ids = array_merge($ids, array_column($rows, 'remote_id'));
                 if (!empty($p['remote_id_hint'])) { $ids[] = $p['remote_id_hint']; }
                 $ids = array_values(array_unique(array_map([Domain::class, 'remoteId'], $ids)));
             }
@@ -311,7 +316,7 @@ final class Payments
         Store::begin();
         try {
             if ($existing) { Store::update('transactions', $row, ['id' => $existing['id']]); } else { Store::insert('transactions', $row); }
-            Manual::resolve($p, (string) $data['Estado']);
+            Manual::resolve($p, (string) $data['Estado'], $id);
             $sum = $wpdb->get_var($wpdb->prepare("SELECT COALESCE(SUM(credit),0) FROM $table WHERE payment_id=%d", $p['id']));
             if ($sum === null || !empty($wpdb->last_error)) { throw new \RuntimeException('Falha ao conferir o crédito financeiro. A conciliação será repetida.'); }
             $sum = (int) $sum;

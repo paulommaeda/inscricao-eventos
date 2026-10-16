@@ -74,16 +74,76 @@ M::reverse($id, 'Correção do comprovante', true); same(S::paid($reverse['id'])
 $canceling = registration(); $attempt = pending($canceling, 'canceling'); failure(fn() => M::save($canceling['id'], input('100', $attempt['id'])));
 failure(fn() => M::save($bad['id'], input('100', $p['id']))); S::update('registrations', ['status' => 'deleted'], ['id' => $bad['id']]); failure(fn() => M::save($bad['id'], input('1')));
 $unreadable = registration(); $wpdb->failSum = true; failure(fn() => M::save($unreadable['id'], input('100'))); same(S::manuals($unreadable['id']), [], 'Read failure creates no manual credit');
+// K8 sync outage: the real charge can be settled locally without API availability.
+$outage = registration(); $attempt = pending($outage, 'review');
+$GLOBALS['http_queue'][] = ['code' => 503, 'body' => '{"Retorno":"ERRO","Mensagem":"Indisponível"}']; failure(fn() => P::sync($attempt['id'], 'outage-k8'));
+$_GET = ['view' => $outage['id']]; $html = capture([Admin::class, 'dashboard']);
+same(str_contains($html, 'Dar baixa manual da transação K8'), true, 'K8 manual action discoverable on failed sync');
+same(str_contains($html, 'id="ie-k8-manual-' . $attempt['id'] . '" open'), true, 'K8 manual panel is already open after sync failure');
+same(strpos($html, 'Histórico de pagamentos K8') < strpos($html, 'Registrar recebimento fora do K8'), true, 'K8 workflow precedes offline receipts');
+$calls = count($GLOBALS['http_calls']); $guid = '12345678-90ab-cdef-0123-456789abcdef';
+$data = array_merge(input('100', $attempt['id']), ['remote_id' => strtoupper(str_replace('-', '', $guid))]); $id = M::save($outage['id'], $data);
+same(S::manual($id)['remote_id'], $guid, 'K8 transaction ID stored canonically'); same(S::payment($attempt['id'])['remote_id_hint'], $guid, 'Manual ID becomes a hint for subsequent verified sync');
+same(S::payment($attempt['id'])['state'], 'review', 'K8 state stays truthful during outage'); same(S::transactions($attempt['id']), [], 'No fictitious K8 transaction during outage');
+same(S::balance($outage)['balance'], 0, 'K8 manual fallback settles balance during outage'); same(count($GLOBALS['http_calls']), $calls, 'K8 manual fallback makes no external call');
+same(M::save($outage['id'], array_merge($data, ['remote_id' => $guid])), $id, 'Canonical ID replay is idempotent');
+failure(fn() => M::save($outage['id'], array_merge($data, ['remote_id' => 'another-k8'])));
+same(array_key_exists('remote_id', S::publicRegistration($outage)['manual_payments'][0]), false, 'Admin-entered transaction ID is private');
+$_GET = ['view' => $outage['id']]; same(str_contains(capture([Admin::class, 'dashboard']), 'Baixada manualmente · aguardando sincronização K8'), true, 'Charge has explicit manual K8 badge');
+queue(remote($attempt, 'Rejeitada', ['Identificador' => 'older-failed-k8'])); P::sync($attempt['id'], 'older-failed-k8'); same(S::paid($outage['id']), 10000, 'Another failed transaction of same checkout cannot erase targeted receipt');
+queue(remote($attempt, 'Aprovada', ['Identificador' => $guid])); queue(remote($attempt, 'Rejeitada', ['Identificador' => 'older-failed-k8'])); P::sync($attempt['id']);
+same(S::creditTotals($outage['id']), ['paid' => 10000, 'gateway_paid' => 10000, 'manual_paid' => 0], 'Late K8 sync by admin-entered ID replaces rather than doubles credit');
+// A failed sibling transaction must not hide the actual paid transaction of the same checkout.
+$sibling = registration(); $attempt = pending($sibling); queue(remote($attempt, 'Rejeitada')); P::sync($attempt['id'], 'tx-manual-' . $attempt['id']);
+failure(fn() => M::save($sibling['id'], array_merge(input('100', $attempt['id']), ['remote_id' => 'tx-manual-' . $attempt['id']])));
+S::update('payments', ['remote_id_hint' => 'new-paid-k8'], ['id' => $attempt['id']]);
+$_GET = ['view' => $sibling['id']]; same(str_contains(capture([Admin::class, 'dashboard']), 'Dar baixa manual da transação K8'), true, 'Final rejected sibling does not hide pending new transaction action');
+$siblingId = M::save($sibling['id'], array_merge(input('100', $attempt['id']), ['remote_id' => 'new-paid-k8'])); same(S::paid($sibling['id']), 10000, 'New K8 transaction can be recognized after rejected sibling');
+foreach (['creating', 'closed'] as $state) { $r = registration(); $a = pending($r, $state); M::save($r['id'], input('100', $a['id'])); same(S::paid($r['id']), 10000, 'Local ' . $state . ' without verified terminal result permits manual K8 receipt'); }
+$invalidId = registration(); $attempt = pending($invalidId);
+foreach (['invalid/id', str_repeat('a', 101), ['forged']] as $value) failure(fn() => M::save($invalidId['id'], array_merge(input('100', $attempt['id']), ['remote_id' => $value])));
+failure(fn() => M::save($invalidId['id'], array_merge(input('100'), ['remote_id' => 'k8-without-charge'])));
+$wpdb->failUpdate = 'wp_ie_payments'; failure(fn() => M::save($invalidId['id'], array_merge(input('100', $attempt['id']), ['remote_id' => 'rollback-id']))); same(S::manuals($invalidId['id']), [], 'Failure saving hint rolls back K8 manual receipt');
+// Reuse an already posted receipt of the same payment, including a fully settled registration.
+$reuse = registration(); $attempt = pending($reuse, 'review'); $original = M::save($reuse['id'], input()); $originalRow = S::manual($original); $before = S::creditTotals($reuse['id']);
+$_GET = ['view' => $reuse['id']]; $html = capture([Admin::class, 'dashboard']); same(str_contains($html, 'Vincular baixa existente ao K8'), true, 'Already settled registration can link existing receipt');
+$calls = count($GLOBALS['http_calls']); $link = ['remote_id' => 'reused-k8', 'note' => 'Mesmo PIX com retorno em atraso', 'confirmed' => true];
+M::linkK8($reuse['id'], $attempt['id'], $original, $link); same(S::creditTotals($reuse['id']), $before, 'Linking an existing receipt preserves every financial total'); same(count(S::manuals($reuse['id'])), 1, 'Linking creates no second receipt');
+foreach (['amount', 'method', 'paid_on', 'note', 'actor_id', 'created_at', 'request_key'] as $field) same(S::manual($original)[$field], $originalRow[$field], 'Link preserves original receipt ' . $field);
+same(S::manual($original)['payment_id'], $attempt['id'], 'Existing receipt now belongs to correct K8 charge'); same(S::manual($original)['remote_id'], 'reused-k8', 'Link stores actual transaction ID');
+same(S::publicRegistration($reuse)['payments'][0]['url'], '', 'Reused receipt hides K8 checkout too'); same(count($GLOBALS['http_calls']), $calls, 'Reclassification works with K8 offline');
+$audit = count(S::auditRows($reuse['id'])); M::linkK8($reuse['id'], $attempt['id'], $original, $link); same(count(S::auditRows($reuse['id'])), $audit, 'Repeated link is idempotent');
+queue(remote($attempt, 'Aprovada', ['Identificador' => 'reused-k8'])); P::sync($attempt['id']); same(S::creditTotals($reuse['id']), ['paid' => 10000, 'gateway_paid' => 10000, 'manual_paid' => 0], 'Reused receipt does not duplicate on late sync');
+$reuseBad = registration(); $attempt = pending($reuseBad); $existing = M::save($reuseBad['id'], input('50')); $link['remote_id'] = 'rollback-link';
+failure(fn() => M::linkK8($reuseBad['id'], $attempt['id'], $existing, array_merge($link, ['confirmed' => false])));
+failure(fn() => M::linkK8($reuseBad['id'], $attempt['id'], $existing, array_merge($link, ['note' => ''])));
+failure(fn() => M::linkK8($reuse['id'], $attempt['id'], $existing, $link));
+$wpdb->failInsert = 'wp_ie_audit'; failure(fn() => M::linkK8($reuseBad['id'], $attempt['id'], $existing, $link)); same(S::manual($existing)['payment_id'], 0, 'Audit failure rolls back reclassification'); same(S::payment($attempt['id'])['remote_id_hint'], '', 'Audit failure rolls back unverified ID hint too'); same(S::paid($reuseBad['id']), 5000, 'Failed link preserves receipt balance');
+$wpdb->failSum = true; failure(fn() => M::linkK8($reuseBad['id'], $attempt['id'], $existing, $link)); same(S::manual($existing)['payment_id'], 0, 'Balance read failure prevents linking');
+S::update('payments', ['method' => 'Cartao'], ['id' => $attempt['id']]); failure(fn() => M::linkK8($reuseBad['id'], $attempt['id'], $existing, $link)); S::update('payments', ['method' => 'Pix', 'state' => 'canceling'], ['id' => $attempt['id']]); failure(fn() => M::linkK8($reuseBad['id'], $attempt['id'], $existing, $link));
+S::update('payments', ['state' => 'review', 'amount' => 1000], ['id' => $attempt['id']]); failure(fn() => M::linkK8($reuseBad['id'], $attempt['id'], $existing, $link));
+M::reverse($existing, 'Correção de teste', true); failure(fn() => M::linkK8($reuseBad['id'], $attempt['id'], $existing, $link));
+// Fully recognizing an entry must also release future payments of the remaining contract balance.
+$entry = registration(); $attempt = pending($entry, 'review'); S::update('payments', ['amount' => 4000], ['id' => $attempt['id']]); $entryManual = M::save($entry['id'], array_merge(input('40', $attempt['id']), ['remote_id' => 'entry-k8']));
+same(S::publicRegistration($entry)['payments'][0]['manual_settled'], true, 'Fully manual-settled entry does not block remaining payments');
+same(S::publicRegistration($entry)['payments'][0]['error'], '', 'Settled entry has no participant blocking warning');
+queue(['Retorno' => 'OK', 'Identificador' => 'remaining-checkout', 'URL' => 'https://sandbox.meuk8.com.br/PagamentosUI/checkout?id=remaining']);
+$remaining = P::create($entry, '60', 'Cartao'); same(S::payment($remaining['payment_id'])['amount'], 6000, 'New card checkout charges only remaining balance after manually settled entry');
+same(S::payment($attempt['id'])['state'], 'review', 'Allowing remaining payment does not fake gateway state'); $calls = count($GLOBALS['http_calls']);
+same(P::create($entry, '60', 'Cartao')['payment_id'], $remaining['payment_id'], 'Repeated remaining payment reuses new checkout'); same(count($GLOBALS['http_calls']), $calls, 'Retry does not create duplicate checkout');
+queue(remote($attempt, 'Aprovada', ['Identificador' => 'entry-k8', 'Valor' => 40, 'ValorPago' => 40])); P::sync($attempt['id']); same(S::paid($entry['id']), 4000, 'Late entry approval leaves remaining balance unchanged after next checkout'); same(S::balance($entry)['balance'], 6000, 'Remaining checkout is not credited before real approval');
+$notComplete = registration(); $attempt = pending($notComplete); S::update('payments', ['amount' => 4000], ['id' => $attempt['id']]); M::save($notComplete['id'], input('20', $attempt['id']));
+same(S::publicRegistration($notComplete)['payments'][0]['manual_settled'], false, 'Partial manual recognition keeps original attempt outstanding'); failure(fn() => P::create($notComplete, '80', 'Cartao'));
 $snapshot = $wpdb->rows; $beforeAudit = count(S::auditRows($offline['id'])); $wpdb->failDelete = 'wp_ie_registrations'; failure(fn() => R::purge($offline['id'])); same($wpdb->rows, $snapshot, 'Failed purge rolls back manual receipt history too');
 $managerState = $wpdb->rows; $managerCalls = count($GLOBALS['http_calls']); $GLOBALS['test_admin'] = false; $GLOBALS['test_manager'] = true; $GLOBALS['test_logged_in'] = true;
 same(A::canView(), true, 'Manager can view'); same(A::canManage(), false, 'Manager cannot manage'); same(Dashboard::permission(), true, 'Manager can use private dashboard API');
 $response = Dashboard::endpoint(new WP_REST_Request([], ['event' => $eid, 'can_manage' => true])); same($response->get_status(), 200, 'Manager reads financial dashboard'); same($response->get_data()['can_manage'], false, 'Client cannot claim write access');
 same(str_contains(Dashboard::shortcode(['evento' => $eid]), 'data-event='), true, 'Manager can use existing dashboard shortcode');
 $_SERVER['REQUEST_METHOD'] = 'POST';
-foreach (['saveEvent' => 'ie_save_event', 'cloneEvent' => 'ie_clone_event', 'deleteEvent' => 'ie_delete_event', 'saveSettings' => 'ie_save_settings', 'testK8' => 'ie_test_k8', 'syncPayment' => 'ie_sync_payment', 'recoverPayment' => 'ie_recover_payment', 'saveRegistration' => 'ie_save_registration', 'registrationAction' => 'ie_registration_action', 'cancelPayment' => 'ie_cancel_payment', 'reviewCancellation' => 'ie_review_cancellation', 'manualPayment' => 'ie_manual_payment', 'reverseManual' => 'ie_reverse_manual'] as $method => $action) {
+foreach (['saveEvent' => 'ie_save_event', 'cloneEvent' => 'ie_clone_event', 'deleteEvent' => 'ie_delete_event', 'saveSettings' => 'ie_save_settings', 'testK8' => 'ie_test_k8', 'syncPayment' => 'ie_sync_payment', 'recoverPayment' => 'ie_recover_payment', 'saveRegistration' => 'ie_save_registration', 'registrationAction' => 'ie_registration_action', 'cancelPayment' => 'ie_cancel_payment', 'reviewCancellation' => 'ie_review_cancellation', 'manualPayment' => 'ie_manual_payment', 'linkManualK8' => 'ie_link_manual_k8', 'reverseManual' => 'ie_reverse_manual'] as $method => $action) {
     $_POST = ['_wpnonce' => wp_create_nonce($action), 'registration_id' => $linked['id'], 'confirmed' => '1']; same(str_contains(failure([Admin::class, $method]), 'administrador'), true, 'Manager blocked on ' . $action . ' even with valid nonce');
 }
-failure(fn() => M::save($linked['id'], input())); failure(fn() => M::reverse($m2, 'Tentativa de gerente', true));
+failure(fn() => M::save($linked['id'], input())); failure(fn() => M::reverse($m2, 'Tentativa de gerente', true)); failure(fn() => M::linkK8($reuse['id'], $attempt['id'], $original, $link));
 $_GET = ['view' => $linked['id']]; $html = capture([Admin::class, 'dashboard']); same(str_contains($html, 'somente consulta'), true, 'Manager detail identifies read-only mode'); same(str_contains($html, 'Pessoa Exemplo'), true, 'Manager can read participant');
 foreach (['ie_save_registration', 'ie_registration_action', 'ie_sync_payment', 'ie_cancel_payment', 'ie_recover_payment', 'ie_manual_payment', 'ie_reverse_manual'] as $action) same(str_contains($html, 'value="' . $action . '"'), false, 'Manager sees no ' . $action . ' form');
 $_GET = ['edit_registration' => $linked['id']]; failure(fn() => capture([Admin::class, 'dashboard'])); $_GET = []; failure([Admin::class, 'settings']);
