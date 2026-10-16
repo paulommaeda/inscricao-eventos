@@ -64,7 +64,7 @@ final class Payments
             $reference = 'IE' . bin2hex(random_bytes(9));
             $id = Store::insert('payments', ['registration_id' => $registration['id'], 'reference' => $reference, 'scope' => $gateway->scope(), 'amount' => $cents, 'method' => $method, 'max_installments' => $installments, 'cpf_snapshot' => $registration['cpf_encrypted'], 'checkout_url' => '', 'state' => 'creating', 'last_error' => '', 'operator_note' => '', 'created_at' => current_time('mysql', true)]);
             $payment = Store::payment($id);
-            $return = add_query_arg(['ie_return' => 1, 'ie_event' => $event['id']], $event['public_page_id'] ? get_permalink((int) $event['public_page_id']) : home_url('/'));
+            $return = add_query_arg(['ie_return' => 1, 'ie_event' => $event['id'], 'ie_payment' => $id], $event['public_page_id'] ? get_permalink((int) $event['public_page_id']) : home_url('/'));
             $callback = add_query_arg('key', self::callbackKey($payment), rest_url('inscricao-eventos/v1/webhook/' . $id));
             try {
                 $result = $gateway->request('/v2/CriaTransacaoCheckout', Gateway::payload($payment, $registration, $event, $return, $callback, Security::unseal($registration['cpf_encrypted'])));
@@ -75,7 +75,7 @@ final class Payments
                 return ['payment_id' => $id, 'url' => $url];
             } catch (\Throwable $e) {
                 Store::update('payments', ['state' => 'review', 'last_error' => Domain::cut($e->getMessage(), 500)], ['id' => $id]);
-                throw new \RuntimeException('Tentativa #' . $id . ' registrada para conferência. Procure a organização antes de tentar novamente.');
+                throw new \RuntimeException('Não foi possível abrir o checkout K8 de ' . ($method === 'Cartao' ? 'cartão' : 'PIX') . '. Tentativa #' . $id . ' registrada para conferência. ' . Domain::cut($e->getMessage(), 350));
             }
         } finally { Store::unlock($lock); }
     }
@@ -213,7 +213,7 @@ final class Payments
         } finally { Store::unlock($lock); }
     }
 
-    public static function sync(int $paymentId, ?string $remoteId = null): void
+    public static function sync(int $paymentId, ?string $remoteId = null, bool $rememberUnverified = true): void
     {
         global $wpdb; $p = Store::payment($paymentId); $lock = Store::lock('registration:' . $p['registration_id']);
         try {
@@ -222,7 +222,7 @@ final class Payments
             if ($remoteId !== null) { $remoteId = Domain::remoteId($remoteId); }
             if ($remoteId) {
                 // Only a retry hint: no transaction or credit is inserted until the API confirms the match.
-                Store::update('payments', ['remote_id_hint' => $remoteId], ['id' => $paymentId]);
+                if ($rememberUnverified) { Store::update('payments', ['remote_id_hint' => $remoteId], ['id' => $paymentId]); }
                 $ids = [$remoteId];
             } else {
                 $rows = $wpdb->get_results($wpdb->prepare('SELECT * FROM ' . Store::table('transactions') . ' WHERE payment_id=%d', $paymentId), ARRAY_A);
@@ -274,16 +274,24 @@ final class Payments
     {
         $created = \DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', (string) ($p['created_at'] ?? ''), new \DateTimeZone('UTC'));
         if (!$created) { throw new \RuntimeException('Data da tentativa inválida para consultar o K8. Informe o ID completo da transação.'); }
-        $data = $api->request('/api/ConsultaTransacoes', ['DataHoraInicial' => $created->modify('-5 minutes')->format(DATE_ATOM), 'DataHoraFinal' => gmdate(DATE_ATOM, time() + 60), 'Tipo' => $p['method'], 'Estado' => 'Todos', 'TipoFiltro' => 'dataemissao']);
-        if (!isset($data['Transacoes']) || !is_array($data['Transacoes'])) { throw new \RuntimeException('Lista de transações K8 inválida. Informe o ID completo da transação para consultar.'); }
-        $ids = [];
-        foreach ($data['Transacoes'] as $row) {
-            if (!is_array($row)) { throw new \RuntimeException('Lista de transações K8 inválida.'); }
-            if (($row['Referencia'] ?? '') !== $p['reference'] && ($row['NumeroPedido'] ?? '') !== $p['reference'] && !self::checkoutMatches($p, $row['IdentificadorCheckout'] ?? $row['CheckoutId'] ?? '')) { continue; }
-            if (!is_string($row['Identificador'] ?? null) && !is_int($row['Identificador'] ?? null)) { throw new \RuntimeException('Identificador inválido na lista de transações K8.'); }
-            $ids[] = Domain::remoteId((string) ($row['Identificador'] ?? ''));
+        $r = Store::registration((int) $p['registration_id']); $event = Store::event((int) $r['event_id']); $zone = new \DateTimeZone($event['timezone']);
+        $from = $created->modify('-5 minutes')->setTimezone($zone)->format(DATE_ATOM); $to = (new \DateTimeImmutable('now', $zone))->modify('+1 minute')->format(DATE_ATOM);
+        $ids = []; $search = []; $rows = [['field' => 'Período da busca K8', 'local' => $from . ' até ' . $to, 'k8' => 'Fuso: ' . $event['timezone'], 'result' => 'Informativo']];
+        foreach (['dataemissao', 'checkout'] as $filter) {
+            $data = $api->request('/api/ConsultaTransacoes', ['DataHoraInicial' => $from, 'DataHoraFinal' => $to, 'Tipo' => $p['method'], 'Estado' => 'Todos', 'TipoFiltro' => $filter]);
+            if (!isset($data['Transacoes']) || !is_array($data['Transacoes'])) { throw new \RuntimeException('Lista de transações K8 inválida. Informe o ID completo da transação para consultar.'); }
+            foreach ($data['Transacoes'] as $row) {
+                if (!is_array($row)) { throw new \RuntimeException('Lista de transações K8 inválida.'); }
+                if (($row['Referencia'] ?? '') !== $p['reference'] && ($row['NumeroPedido'] ?? '') !== $p['reference'] && !self::checkoutMatches($p, $row['IdentificadorCheckout'] ?? $row['CheckoutId'] ?? '')) { continue; }
+                if (!is_string($row['Identificador'] ?? null) && !is_int($row['Identificador'] ?? null)) { throw new \RuntimeException('Identificador inválido na lista de transações K8.'); }
+                $ids[] = Domain::remoteId((string) $row['Identificador']);
+            }
+            $ids = array_values(array_unique($ids)); $search[] = ['filter' => $filter, 'returned' => count($data['Transacoes']), 'matched' => count($ids)];
+            $rows[] = ['field' => 'Busca: ' . $filter, 'local' => 'Pedido/referência ' . $p['reference'] . ' ou checkout ' . ($p['checkout_id'] ?? ''), 'k8' => count($data['Transacoes']) . ' transações; ' . count($ids) . ' correspondências exatas', 'result' => $ids ? 'Encontrada' : 'Não localizada'];
+            Store::update('payments', ['diagnostic_json' => wp_json_encode(['checked_at' => current_time('mysql', true), 'rows' => $rows, 'search' => $search])], ['id' => $p['id']]);
+            if ($ids) { break; }
         }
-        return array_values(array_unique($ids));
+        return $ids;
     }
 
     /** Caller holds the registration lock. Callback payloads never call this directly. */
@@ -322,7 +330,7 @@ final class Payments
             $sum = (int) $sum;
             $state = $sum > 0 ? 'paid' : (Domain::terminal($data['Estado']) ? 'closed' : 'pending');
             foreach (Store::transactions((int) $p['id']) as $tx) { if (in_array($tx['cancel_status'] ?? '', ['sending', 'requested', 'review'], true)) { $state = 'canceling'; break; } }
-            Store::update('payments', ['state' => $state, 'synced_at' => current_time('mysql', true), 'last_error' => '', 'webhook_error' => ''], ['id' => $p['id']]);
+            Store::update('payments', ['state' => $state, 'remote_id_hint' => $id, 'synced_at' => current_time('mysql', true), 'last_error' => '', 'webhook_error' => ''], ['id' => $p['id']]);
             Store::commit();
         } catch (\Throwable $e) { Store::rollback(); throw $e; }
     }

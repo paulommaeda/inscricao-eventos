@@ -20,6 +20,7 @@ jobs:
       - run: php tests/dashboard.php
       - run: php tests/installments.php
       - run: php tests/manual.php
+      - run: php tests/production.php
   browser:
     runs-on: ubuntu-latest
     steps:

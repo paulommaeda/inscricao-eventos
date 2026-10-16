@@ -58,7 +58,26 @@ final class Api
             if ($expected !== null && (!is_int($expected) || $expected < 1 || $expected > 12)) { throw new \RuntimeException('Confira as condições de parcelamento.'); }
             return Payments::create($r, $input['amount'] ?? '', $input['method'] ?? null, $expected);
         }
-        if ($action === 'refresh') { Security::limit('refresh:' . $r['id'], 15, 300); Payments::refreshRegistration($r); }
+        if ($action === 'refresh') {
+            Security::limit('refresh:' . $r['id'], 15, 300);
+            if (!empty($input['remote_id'])) {
+                if (!is_string($input['remote_id'])) { throw new \RuntimeException('Identificador K8 inválido no retorno.'); }
+                if (isset($input['payment_id']) && (!is_int($input['payment_id']) || $input['payment_id'] < 1)) { throw new \RuntimeException('Cobrança inválida no retorno K8.'); }
+                $remoteId = Domain::remoteId($input['remote_id']); $paymentId = absint($input['payment_id'] ?? 0);
+                if (!$paymentId) {
+                    $open = array_values(array_filter(Store::payments((int) $r['id']), static fn($p) => in_array($p['state'], ['pending', 'review', 'creating'], true)));
+                    if (count($open) === 1) { $paymentId = (int) $open[0]['id']; }
+                }
+                if ($paymentId) {
+                    $p = Store::payment($paymentId);
+                    if ((int) $p['registration_id'] !== (int) $r['id']) { throw new \RuntimeException('O retorno K8 não pertence a esta inscrição.'); }
+                    try { Payments::sync($paymentId, $remoteId, false); }
+                    catch (\Throwable $e) { return array_merge(Store::publicRegistration($r), ['return_retry' => true]); }
+                    return Store::publicRegistration($r);
+                }
+            }
+            Payments::refreshRegistration($r);
+        }
         return Store::publicRegistration($r);
     }
     public static function webhookPermission(\WP_REST_Request $req)

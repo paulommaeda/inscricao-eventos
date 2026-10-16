@@ -17,7 +17,8 @@ const event = {
     { id: 3, name: 'Lote 3', starts_on: '2027-01-01', ends_on: '2027-01-30', price: 55000, max_installments: 6, note: '' }
   ]
 };
-let account = null, failPayment = false, calls = [], quote = event;
+let account = null, failPayment = false, failRefresh = false, retryReturn = false, calls = [], quote = event;
+let checkoutURL = 'https://sandbox.meuk8.com.br/PagamentosUI/checkout?id=test-only';
 function makeAccount(method = 'Pix', paid = 10000) {
   return { id: 1, event_id: 1, event_name: event.name, name: 'João', lot: 'Lote 1', method, max_installments: 10,
     payment_methods: method === 'Pix' ? ['Pix', 'Cartao'] : ['Cartao'], card_installments: { base: 10, max: paid ? 7 : 10, months: paid ? 3 : 0, next_reduction: '2027-02-17' },
@@ -41,16 +42,16 @@ function makeAccount(method = 'Pix', paid = 10000) {
         case '/api/register': account = makeAccount(input.method, 0); data = account; break;
         case '/api/payment':
           if (failPayment) { account.payments = [{ id: 4, amount: 10000, credit: 0, method: 'Pix', state: 'review', created_at: '2026-10-20 12:00:00', url: '' }]; status = 400; data = { message: 'Pagamento em conferência.' }; }
-          else data = { payment_id: 3, url: 'https://sandbox.meuk8.com.br/PagamentosUI/checkout?id=test-only' };
+          else data = { payment_id: 3, url: checkoutURL };
           break;
-        case '/api/refresh': data = account; break;
+        case '/api/refresh': if (failRefresh) { status = 503; data = { message: 'Conciliação temporariamente indisponível.' }; } else data = retryReturn ? { ...account, return_retry: true } : account; break;
         case '/api/logout': account = null; data = { ok: true }; break;
         default: status = 404; data = { message: 'Unknown test endpoint' };
       }
       res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)); return;
     }
     if (['/public.css', '/public.js'].includes(url.pathname)) {
-      res.setHeader('Content-Type', url.pathname.endsWith('.css') ? 'text/css' : 'application/javascript'); res.end(fs.readFileSync(path.join(plugin, 'assets', url.pathname.slice(1)))); return;
+      res.setHeader('Content-Type', url.pathname.endsWith('.css') ? 'text/css' : 'application/javascript'); res.end(fs.readFileSync(url.pathname === '/public.js' && process.env.IE_TEST_PUBLIC_JS ? process.env.IE_TEST_PUBLIC_JS : path.join(plugin, 'assets', url.pathname.slice(1)))); return;
     }
     res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end('<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/public.css"><style>body{margin:0;padding:16px;background:#ecefe8}</style><div class="ie-app" data-event="1"></div><script>window.IE_CONFIG={api:"/api/",nonce:""}</script><script src="/public.js"></script></html>');
   });
@@ -59,7 +60,9 @@ function makeAccount(method = 'Pix', paid = 10000) {
   const browser = await chromium.launch({ headless: true, ...(process.env.IE_TEST_CHROMIUM ? { executablePath: process.env.IE_TEST_CHROMIUM, args: process.env.IE_TEST_CHROMIUM_ARGS_MODULE ? require(process.env.IE_TEST_CHROMIUM_ARGS_MODULE).default.args : ['--no-sandbox', '--disable-dev-shm-usage'] } : {}) });
   const page = await browser.newPage({ viewport: { width: 1366, height: 1000 } });
   const errors = []; page.on('pageerror', e => errors.push(e.message));
-  await page.route('https://sandbox.meuk8.com.br/**', route => route.fulfill({ contentType: 'text/html', body: '<h1>Checkout K8 simulado</h1>' }));
+  async function checkoutRoute(route) { await route.fulfill({ contentType: 'text/html', body: '<h1>Checkout K8 simulado</h1>' }); }
+  await page.route('https://sandbox.meuk8.com.br/**', checkoutRoute);
+  await page.route('https://pagamentos.meuk8.com.br/**', checkoutRoute);
   await page.goto(base); await page.locator('[data-form="register"]').waitFor();
   assert.equal(await page.locator('.ie-lot').count(), 3); assert.equal(await page.locator('.ie-lot-active').count(), 1);
   assert.match(await page.locator('.ie-lot-active').textContent(), /490/);
@@ -98,17 +101,52 @@ function makeAccount(method = 'Pix', paid = 10000) {
   account.payment_methods = ['Pix']; await page.goto(base); await page.locator('[data-form="pay"]').waitFor(); assert.equal(await page.locator('[data-form="pay"] input[value="Cartao"]').count(), 0);
   // Card selection sends the entire frozen amount, and the entry input stops being required.
   account = null; await page.goto(base); await page.locator('[data-form="register"]').waitFor();
+  const registrationsBeforeInvalid = calls.filter(c => c.route === '/api/register').length;
+  await page.locator('button[type="submit"]').click(); assert.match(await page.locator('.ie-alert').textContent(), /campos obrigatórios/);
+  assert.equal(calls.filter(c => c.route === '/api/register').length, registrationsBeforeInvalid);
   await page.locator('input[name="name"]').fill('João Exemplo'); await page.locator('input[name="email"]').fill('joao@example.test');
   await page.locator('input[name="phone"]').fill('41999999999'); await page.locator('input[name="cpf"]').fill('52998224725');
   await page.locator('input[value="Cartao"]').check(); assert(await page.locator('.ie-entry').isHidden());
   await page.locator('input[name="accepted"]').check(); await page.locator('button[type="submit"]').click(); await page.waitForURL('https://sandbox.meuk8.com.br/**');
   assert.equal(calls.findLast(c => c.route === '/api/register').input.expected_price, 49000);
   assert.equal(calls.findLast(c => c.route === '/api/payment').input.amount, '490.00');
+  // Browser restoration/autofill can restore the card radio without firing change.
+  account = null; checkoutURL = 'https://pagamentos.meuk8.com.br/PagamentosUI/checkout?id=production-test-only';
+  await page.goto(base); await page.locator('[data-form="register"]').waitFor();
+  await page.locator('input[name="name"]').fill('Pessoa Exemplo'); await page.locator('input[name="email"]').fill('pessoa@example.test');
+  await page.locator('input[name="phone"]').fill('41999999999'); await page.locator('input[name="cpf"]').fill('52998224725');
+  await page.locator('input[value="Cartao"]').evaluate(el => { el.checked = true; });
+  await page.locator('input[name="accepted"]').check(); await page.locator('button[type="submit"]').click();
+  await page.waitForURL('https://pagamentos.meuk8.com.br/**', { timeout: 2000 });
+  assert.deepEqual(calls.findLast(c => c.route === '/api/payment').input, { amount: '490.00', method: 'Cartao', expected_installments: 10 });
+  checkoutURL = 'https://sandbox.meuk8.com.br/PagamentosUI/checkout?id=test-only';
+  // If navigation is canceled, the same created checkout remains available as a direct link.
+  account = null; await page.goto(base); await page.locator('[data-form="register"]').waitFor();
+  await page.locator('input[name="name"]').fill('Pessoa Exemplo'); await page.locator('input[name="email"]').fill('pessoa@example.test');
+  await page.locator('input[name="phone"]').fill('41999999999'); await page.locator('input[name="cpf"]').fill('52998224725');
+  await page.locator('input[value="Cartao"]').check(); await page.locator('input[name="accepted"]').check();
+  await page.evaluate(() => { window.ieCancelNavigation = event => { if (new URL(event.destination.url).hostname.endsWith('.meuk8.com.br')) event.preventDefault(); }; window.navigation.addEventListener('navigate', window.ieCancelNavigation); });
+  const beforeFallback = calls.filter(c => c.route === '/api/payment').length;
+  await page.locator('button[type="submit"]').click(); await page.locator('.ie-checkout a').waitFor({ timeout: 3000 });
+  assert.equal(await page.locator('.ie-checkout a').getAttribute('href'), checkoutURL); assert.equal(calls.filter(c => c.route === '/api/payment').length, beforeFallback + 1);
+  assert.equal(await page.locator('[data-form="register"], [data-form="pay"]').count(), 0);
+  if (artifacts) await page.screenshot({ path: path.join(artifacts, 'checkout-fallback-mobile.png'), fullPage: true });
+  await page.evaluate(() => { window.navigation.removeEventListener('navigate', window.ieCancelNavigation); });
+  await page.locator('.ie-checkout a').click(); await page.waitForURL('https://sandbox.meuk8.com.br/**');
   // A return URL alone cannot cause the frontend to display settlement.
   account = makeAccount('Cartao', 0); await page.goto(base + '?ie_return=1&ie_event=1'); await page.locator('.ie-account').waitFor();
   assert.equal(await page.locator('.ie-success').count(), 0); assert.match(await page.locator('.ie-balance-main').textContent(), /490/);
   account = makeAccount('Cartao', 49000); await page.locator('[data-action="refresh"]').click(); await page.locator('.ie-success').waitFor();
   assert.match(await page.locator('.ie-success').textContent(), /quitada/);
+  account = makeAccount('Pix', 0); await page.goto(base + '?ie_return=1&ie_event=1&ie_payment=8&ID_BknBank=bank-return-id'); await page.locator('.ie-account').waitFor();
+  assert.deepEqual(calls.findLast(c => c.route === '/api/refresh').input, { remote_id: 'bank-return-id', payment_id: 8 });
+  assert.equal(await page.locator('.ie-success').count(), 0);
+  retryReturn = true; await page.goto(base + '?ie_return=1&ie_event=1&ie_payment=8&ID_BknBank=bank-return-id'); await page.locator('.ie-account').waitFor();
+  await page.locator('[data-action="refresh"]').click(); assert.deepEqual(calls.findLast(c => c.route === '/api/refresh').input, { remote_id: 'bank-return-id', payment_id: 8 });
+  retryReturn = false; await page.locator('[data-action="refresh"]').click(); await page.locator('[data-action="refresh"]').click();
+  assert.deepEqual(calls.findLast(c => c.route === '/api/refresh').input, {});
+  failRefresh = true; await page.goto(base + '?ie_return=1&ie_event=1&ie_payment=8&ID_BknBank=bank-return-id'); await page.locator('.ie-account').waitFor();
+  assert.match(await page.locator('.ie-alert').textContent(), /temporariamente indisponível/); assert.equal(await page.locator('[data-form="register"]').count(), 0); failRefresh = false;
   // Pending checkouts are resumed and prevent an additional amount form.
   account = makeAccount(); account.payments.unshift({ id: 4, amount: 5000, method: 'Pix', state: 'pending', created_at: '2026-10-20 12:00:00', url: 'https://sandbox.meuk8.com.br/PagamentosUI/checkout?id=test-only' });
   await page.goto(base); await page.locator('.ie-account').waitFor(); assert.equal(await page.locator('[data-form="pay"]').count(), 0);
@@ -147,5 +185,5 @@ function makeAccount(method = 'Pix', paid = 10000) {
   await page.locator('.ie-tabs [data-tab="lookup"]').click(); assert.equal(await page.locator('[data-form="lookup"]').count(), 1);
   assert.deepEqual(errors, []);
   await browser.close(); server.close();
-  console.log('OK: desktop/mobile, CPF lookup, PIX deposit + reduced card balance, minimum 1x, method restrictions, return without approval, settlement, pending reuse and no JS errors.');
+  console.log('OK: desktop/mobile, restored card selection, production redirect + direct checkout link, PIX return hint, preserved account on failure, reduced card balance, settlement and no duplicate checkout.');
 })().catch(error => { console.error(error); process.exit(1); });

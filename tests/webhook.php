@@ -26,6 +26,8 @@ function transaction(array $p, string $id, array $extra = []): array {
 $aes = '1234567890abcdef';
 update_option('ie_settings', ['environment' => 'sandbox', 'credentials' => C::seal(json_encode(['id' => 'mock-client', 'secret' => 'mock-secret', 'aes' => $aes]))]);
 $scope = (new G())->scope();
+S::insert('events', ['name' => 'Evento de teste', 'timezone' => 'America/Sao_Paulo']);
+S::insert('events', ['name' => 'Segundo evento de teste', 'timezone' => 'America/Sao_Paulo']);
 $registrationId = S::insert('registrations', ['event_id' => 1, 'scope' => $scope, 'total' => 49000, 'cpf_encrypted' => C::seal('52998224725')]);
 function payment(string $reference): array {
     global $registrationId, $scope;
@@ -248,8 +250,9 @@ foreach ([[$unrelated], []] as $rows) {
     $calls = count($GLOBALS['http_calls']);
     queue(['Retorno' => 'ERRO', 'DetalhesErro' => 'Referência da Transação IEnomatch não localizada.']);
     queue(['Retorno' => 'OK', 'Transacoes' => $rows]);
+    queue(['Retorno' => 'OK', 'Transacoes' => []]);
     same(dispatch(notification($noMatch))->get_status(), 503, 'No exact match remains retryable');
-    same(count($GLOBALS['http_calls']) - $calls, 2, 'No lookup of unrelated transaction IDs');
+    same(count($GLOBALS['http_calls']) - $calls, 3, 'Both discovery filters avoid unrelated transaction IDs');
     same(S::payment($noMatch['id'])['state'], 'pending', 'Absence never closes or releases a charge');
     same(S::payment($noMatch['id'])['remote_id_hint'], '', 'Same CPF/amount alone cannot select a transaction');
     same(str_contains(S::payment($noMatch['id'])['last_error'], 'ID completo'), true, 'No-match diagnostic explains manual recovery');

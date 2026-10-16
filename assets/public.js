@@ -6,7 +6,7 @@
   const cfg = window.IE_CONFIG || {};
 
   document.querySelectorAll('.ie-app').forEach(root => {
-    const state = { events: [], event: null, csrf: '', account: null, tab: 'register', error: '', busy: false, polls: 0 };
+    const state = { events: [], event: null, csrf: '', account: null, checkout: '', returnHint: {}, tab: 'register', error: '', busy: false, polls: 0 };
     let timer;
     async function api(path, body) {
       const headers = { 'Content-Type': 'application/json' };
@@ -30,6 +30,25 @@
     }
     function deadline(e) { return esc((e.payment_message || 'O saldo devedor deve ser quitado até o dia do evento: {data}.').replaceAll('{data}', date(e.payment_deadline))); }
     function selectedLot() { return state.event.lots.find(l => l.id === state.event.active_lot); }
+    function syncPaymentFields(form) {
+      const method = form.querySelector('input[name="method"]:checked')?.value;
+      if (!method) return;
+      const pix = method === 'Pix'; const entry = form.querySelector('.ie-entry'); const amount = entry?.querySelector('input[name="amount"]');
+      if (entry) entry.hidden = !pix;
+      if (amount) { amount.required = pix; amount.disabled = !pix; }
+      const terms = form.querySelector('.ie-card-terms'); if (terms) terms.hidden = pix;
+    }
+    function checkoutView() {
+      return `<div class="ie-checkout"><h2>Seu checkout K8 está pronto</h2><p>Você será direcionado para concluir o pagamento. Se a página não abrir automaticamente, use o botão abaixo.</p><a class="ie-btn" href="${esc(state.checkout)}">Abrir checkout K8 →</a><p class="ie-hint">A inscrição será atualizada após a confirmação do pagamento.</p><button type="button" class="ie-text-btn" data-action="refresh">Voltar ao saldo da inscrição</button></div>`;
+    }
+    function returnedPayment(params) {
+      const values = {};
+      for (const [name, value] of params) values[name.toLowerCase()] = value;
+      const remote = ['id_bknbank', 'identificador', 'idtransacao', 'id'].map(key => values[key]).find(value => /^[A-Za-z0-9-]{1,100}$/.test(value || ''));
+      if (!remote) return {};
+      const id = Number(params.get('ie_payment'));
+      return { remote_id: remote, ...(Number.isSafeInteger(id) && id > 0 ? { payment_id: id } : {}) };
+    }
 
     function registerForm(e) {
       const lot = selectedLot();
@@ -76,20 +95,22 @@
       const e = state.event;
       if (!e) { root.innerHTML = '<div class="ie-empty"><h2>Evento em preparação</h2><p>A organização está finalizando as informações de inscrição.</p></div>'; return; }
       root.style.setProperty('--ie-primary', e.primary_color); root.style.setProperty('--ie-accent', e.accent_color); root.style.setProperty('--ie-bg', e.background_color);
+      const content = state.checkout ? checkoutView() : (state.account ? accountView(state.account) : `<nav class="ie-tabs" aria-label="Inscrições"><button type="button" data-tab="register" aria-pressed="${state.tab === 'register'}" class="${state.tab === 'register' ? 'active' : ''}">Fazer inscrição</button><button type="button" data-tab="lookup" aria-pressed="${state.tab === 'lookup'}" class="${state.tab === 'lookup' ? 'active' : ''}">Minha inscrição</button></nav>${state.tab === 'lookup' ? lookupForm() : registerForm(e)}`);
       root.innerHTML = `<div class="ie-shell"><header class="ie-hero ${e.hero_url ? 'ie-has-cover' : ''}">${e.hero_url ? `<img class="ie-cover" src="${esc(e.hero_url)}" alt="">` : ''}<div class="ie-hero-content">${e.logo_url ? `<img class="ie-logo" src="${esc(e.logo_url)}" alt="Logo do evento">` : '<span class="ie-eyebrow">Um encontro especial</span>'}<h1>${esc(e.name)}</h1><div class="ie-description">${e.description}</div><div class="ie-event-meta">${e.event_date ? `<span>◷ ${date(e.event_date)}</span>` : ''}${e.location ? `<span>⌖ ${esc(e.location)}</span>` : ''}</div></div></header>
         ${state.events.length > 1 && !Number(root.dataset.event) ? `<label class="ie-event-picker">Escolha seu evento<select data-events>${state.events.map(item => `<option value="${item.id}" ${item.id === e.id ? 'selected' : ''}>${esc(item.name)}</option>`).join('')}</select></label>` : ''}
         <div class="ie-body"><div class="ie-lots">${e.lots.map(l => `<article class="ie-lot ${l.id === e.active_lot ? 'ie-lot-active' : ''}"><div><b>${esc(l.name)}</b>${l.id === e.active_lot ? '<span class="ie-lot-tag">Atual</span>' : ''}</div><strong>${money(l.price)}</strong><small>${date(l.starts_on)} a ${date(l.ends_on)}</small><small>${e.allow_card ? `Cartão até ${l.max_installments}x` : 'Pagamento por PIX'}</small>${l.note ? `<small class="ie-lot-note">${esc(l.note)}</small>` : ''}</article>`).join('')}</div>
         ${e.notice ? `<div class="ie-notice">${esc(e.notice)}</div>` : ''}
-        <div class="ie-content"><div class="ie-alert" role="alert" ${!state.error ? 'hidden' : ''}>${esc(state.error)}</div><div class="ie-progress" role="status" hidden>Processando… aguarde.</div>${state.account ? accountView(state.account) : `<nav class="ie-tabs" aria-label="Inscrições"><button type="button" data-tab="register" aria-pressed="${state.tab === 'register'}" class="${state.tab === 'register' ? 'active' : ''}">Fazer inscrição</button><button type="button" data-tab="lookup" aria-pressed="${state.tab === 'lookup'}" class="${state.tab === 'lookup' ? 'active' : ''}">Minha inscrição</button></nav>${state.tab === 'lookup' ? lookupForm() : registerForm(e)}`}</div><footer class="ie-footer">Inscrições de ${date(e.registration_start)} a ${date(e.registration_end)}<br>${deadline(e)}</footer></div></div>`;
+        <div class="ie-content"><div class="ie-alert" role="alert" ${!state.error ? 'hidden' : ''}>${esc(state.error)}</div><div class="ie-progress" role="status" hidden>Processando… aguarde.</div>${content}</div><footer class="ie-footer">Inscrições de ${date(e.registration_start)} a ${date(e.registration_end)}<br>${deadline(e)}</footer></div></div>`;
+      root.querySelectorAll('form[data-form]').forEach(form => { form.noValidate = true; syncPaymentFields(form); });
       schedulePoll();
     }
     function schedulePoll() {
       clearTimeout(timer);
-      if (!state.account || !state.account.payments.some(p => ['pending', 'canceling'].includes(p.state)) || state.polls >= 20) return;
+      if (state.checkout || !state.account || (!state.returnHint.remote_id && !state.account.payments.some(p => ['pending', 'canceling'].includes(p.state))) || state.polls >= 20) return;
       timer = setTimeout(async () => {
         if (document.hidden || state.busy) { schedulePoll(); return; }
         state.polls++;
-        try { state.account = await api('refresh', {}); render(); } catch (_) { schedulePoll(); }
+        try { state.account = await api('refresh', state.returnHint); if (!state.account.return_retry) state.returnHint = {}; render(); } catch (_) { schedulePoll(); }
       }, 30000);
     }
     root.addEventListener('input', event => {
@@ -98,29 +119,29 @@
     });
     root.addEventListener('change', event => {
       if (event.target.name === 'method') {
-        const entry = root.querySelector('.ie-entry'); const input = entry?.querySelector('input');
-        if (entry) entry.hidden = event.target.value !== 'Pix'; if (input) { input.required = event.target.value === 'Pix'; input.disabled = event.target.value !== 'Pix'; }
-        const terms = root.querySelector('.ie-card-terms'); if (terms) terms.hidden = event.target.value !== 'Cartao';
+        const form = event.target.closest('form[data-form]'); if (form) syncPaymentFields(form);
       }
-      if (event.target.matches('[data-events]')) { state.event = state.events.find(e => e.id === Number(event.target.value)); state.account = null; state.error = ''; render(); }
+      if (event.target.matches('[data-events]')) { state.event = state.events.find(e => e.id === Number(event.target.value)); state.account = null; state.checkout = ''; state.returnHint = {}; state.error = ''; render(); }
     });
     root.addEventListener('click', async event => {
       const button = event.target.closest('[data-tab],[data-action]'); if (!button || state.busy) return;
       if (button.dataset.tab) { state.tab = button.dataset.tab; state.error = ''; render(); return; }
       alert(''); busy(true);
       try {
-        if (button.dataset.action === 'logout') { await api('logout', {}); state.account = null; state.tab = 'lookup'; }
-        if (button.dataset.action === 'refresh') state.account = await api('refresh', {});
+        if (button.dataset.action === 'logout') { await api('logout', {}); state.account = null; state.checkout = ''; state.returnHint = {}; state.tab = 'lookup'; }
+        if (button.dataset.action === 'refresh') { state.account = await api('refresh', state.returnHint); if (!state.account.return_retry) state.returnHint = {}; state.checkout = ''; }
         render();
       } catch (e) { alert(e.message); } finally { busy(false); }
     });
     root.addEventListener('submit', async event => {
       const form = event.target.closest('[data-form]'); if (!form) return; event.preventDefault();
-      if (state.busy || !form.reportValidity()) return;
+      if (state.busy) return;
+      syncPaymentFields(form);
+      if (!form.checkValidity()) { alert('Confira os campos obrigatórios e o aceite das condições para continuar.'); form.reportValidity(); return; }
       const values = new FormData(form); const kind = form.dataset.form; const method = values.get('method'); let amount = values.get('amount');
       alert(''); busy(true);
       try {
-        if (kind === 'lookup') { state.account = await api('lookup', { event_id: state.event.id, cpf: values.get('cpf') }); render(); return; }
+        if (kind === 'lookup') { state.account = await api('lookup', { event_id: state.event.id, cpf: values.get('cpf') }); state.returnHint = {}; render(); return; }
         if (kind === 'register') {
           const lot = selectedLot();
           state.account = await api('register', { event_id: state.event.id, lot_id: lot.id, expected_price: lot.price, name: values.get('name'), email: values.get('email'), phone: values.get('phone'), cpf: values.get('cpf'), method, accepted_terms: values.get('accepted') === 'on' });
@@ -128,7 +149,9 @@
         if (method === 'Cartao') amount = (state.account.balance / 100).toFixed(2);
         const expected = method === 'Cartao' ? state.account.card_installments?.max ?? state.account.max_installments : undefined;
         const payment = await api('payment', { amount, method, ...(expected === undefined ? {} : { expected_installments: expected }) });
-        window.location.assign(payment.url);
+        if (typeof payment.url !== 'string' || !/^https:\/\//i.test(payment.url)) throw new Error('O checkout não retornou um endereço válido. Atualize o saldo antes de tentar novamente.');
+        state.checkout = payment.url; render();
+        try { window.location.assign(payment.url); } catch (_) { alert('Use o botão Abrir checkout K8 para continuar o pagamento.'); }
       } catch (e) {
         if (state.account) { try { state.account = await api('account', {}); } catch (_) {} render(); }
         alert(e.message);
@@ -143,7 +166,13 @@
         state.event = state.events.find(e => e.id === returnEvent) || state.events[0] || null;
         try {
           const account = await api('account', {});
-          if (account.event_id === state.event?.id) state.account = returning.has('ie_return') ? await api('refresh', {}) : account;
+          if (account.event_id === state.event?.id) {
+            state.account = account;
+            if (returning.has('ie_return')) {
+              state.returnHint = returnedPayment(returning);
+              try { state.account = await api('refresh', state.returnHint); if (!state.account.return_retry) state.returnHint = {}; } catch (e) { state.error = e.message; state.returnHint = {}; }
+            }
+          }
         } catch (_) { /* No active CPF session yet. */ }
         render();
       } catch (e) { root.innerHTML = `<div class="ie-empty" role="alert"><h2>Não foi possível carregar</h2><p>${esc(e.message)}</p><button class="ie-btn" type="button" onclick="window.location.reload()">Tentar novamente</button></div>`; }

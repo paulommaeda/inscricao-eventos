@@ -2,7 +2,7 @@
 Contributors: paulommaeda
 Requires at least: 6.4
 Requires PHP: 8.1
-Stable tag: 1.4.1
+Stable tag: 1.4.2
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -14,6 +14,14 @@ Use [inscricao_eventos evento="1"] em uma página. A ativação cria o modelo do
 Use [inscricao_eventos_dashboard evento="1"] para o dashboard privado da organização.
 
 == Changelog ==
+= 1.4.2 =
+* Validação do meio de pagamento refeita antes do envio: cartão não depende do campo de entrada PIX, inclusive com seleção restaurada pelo navegador/autopreenchimento.
+* Botão Abrir checkout K8 disponível após a criação, com redirecionamento automático e sem nova cobrança.
+* Retorno do participante recupera ID_BknBank e vincula a cobrança exata; o ID é apenas uma pista para consulta e confirmação no servidor.
+* Conciliação por referência não localizada tenta os filtros dataemissao e checkout, com datas no fuso do evento e diagnóstico de resultados sem dados de terceiros.
+* Erros de abertura do checkout identificam o meio e a tentativa, preservando a causa com credenciais/documentos ocultos.
+* Falha de atualização no retorno conserva a tela da inscrição; testes específicos de protocolo em produção com API simulada.
+
 = 1.4.1 =
 * Ação destacada para dar baixa manual da própria transação K8 quando a sincronização falhar, com painel aberto nas falhas e motivo de indisponibilidade visível.
 * ID K8 opcional preservado no histórico e usado como pista para a próxima consulta verificada; nenhuma chamada K8 é necessária para a baixa manual.

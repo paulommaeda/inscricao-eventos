@@ -25,6 +25,16 @@ O modelo nasce como **rascunho**, pois a data exata do evento não foi informada
 
 O cartão usa as modalidades à vista e parcelado sem juros do checkout K8. O evento pode aceitar apenas cartão, apenas PIX ou ambos. A entrada mínima do modelo é R$ 1,00, editável; não foi presumida uma entrada obrigatória maior.
 
+## Checkout e conciliação em produção (1.4.2)
+
+A seleção de cartão é conferida novamente antes de enviar o formulário, inclusive se o navegador restaurar a opção sem disparar o evento de troca. O campo de entrada PIX fica desabilitado para cartão; os demais campos e o aceite continuam obrigatórios. Depois da criação, a tela oferece **Abrir checkout K8** e tenta o redirecionamento automaticamente. O botão usa a cobrança já criada, sem emitir outra. Uma recusa na criação informa o meio, o número da tentativa e o motivo seguro devolvido pelo K8. Cobranças de resultado desconhecido continuam protegidas contra repetição.
+
+Novos checkouts incluem a identificação local da cobrança na URL de volta. Se o K8 acrescentar `ID_BknBank`, `Identificador` ou `IdTransacao` à URL, o navegador o encaminha como pista ao servidor. A sessão precisa pertencer à inscrição dessa cobrança; o servidor consulta o ID e continua exigindo correspondência de CPF, pedido/referência/checkout, conta, método e valor. A URL de retorno nunca confirma pagamento por si só. Em URLs antigas sem identificação local, uma pista só é vinculada automaticamente quando há exatamente uma tentativa em aberto; não se escolhe entre cobranças ambíguas. Se a consulta falhar, o navegador conserva a pista para tentar novamente e mantém a tela/saldo da inscrição. O ID canônico usado na conciliação do servidor só é substituído após uma consulta válida, impedindo que um parâmetro falso na URL altere a identificação já conferida.
+
+Quando a referência não estiver localizada e não houver ID conhecido, a busca tenta os filtros documentados `dataemissao` e `checkout`. As datas mantêm o instante de criação, com tolerância de cinco minutos, e são enviadas no fuso do evento. Só correspondências exatas de referência, pedido ou checkout geram uma nova consulta por ID. O diagnóstico administrativo registra período, filtros, quantidades retornadas e correspondências, sem guardar nomes, CPFs ou IDs de transações alheias. Se ambas as buscas não localizarem uma correspondência, o pagamento continua em conferência; o administrador pode usar o ID da transação ou a baixa manual com comprovante.
+
+Após atualizar, limpe o cache da página/otimizador e recarregue a página de inscrições. Testes automatizados usam transporte K8 simulado; a validação final da habilitação de cartão da conta e do retorno em produção depende do K8.
+
 ## Fluxo do participante
 
 - **Inscrição:** nome, e-mail, telefone com DDD e CPF válido; escolha da forma de pagamento e aceite das condições.
@@ -174,7 +184,7 @@ O ID recebido é uma pista para consultar a API, sem criar crédito diretamente.
 
 A versão 1.0.3 normaliza GUIDs K8 de 32 caracteres ou com hífens, incluindo diferenças de maiúsculas/minúsculas, tanto para a transação quanto para o checkout. O ID financeiro é guardado em formato canônico. Registros antigos em outro formato do mesmo GUID são reutilizados e normalizados na transação de banco. Se houver dois registros históricos do mesmo GUID em formatos diferentes, a conciliação é interrompida para conferência, sem apagar registros ou inventar uma correção de saldo.
 
-Se a consulta por referência devolver especificamente **referência da transação não localizada**, o plugin consulta `/api/ConsultaTransacoes` no período desde a criação da tentativa. Seleciona apenas correspondências exatas de pedido, referência ou checkout e consulta cada ID novamente em `/api/ConsultaTransacao`. A lista nunca confirma crédito diretamente, e CPF/valor/método seguem obrigatórios. CPF e valor iguais, sozinhos, não identificam um pagamento. Se a API não devolver uma correspondência ou o resultado estiver indisponível/incompleto, a tentativa continua pendente ou em conferência, e o administrador pode informar o ID completo da transação. Essa consulta não cria checkout nem libera outra cobrança.
+Se a consulta por referência devolver especificamente **referência da transação não localizada**, o plugin consulta `/api/ConsultaTransacoes` no período desde a criação da tentativa, primeiro por `dataemissao` e depois por `checkout` se necessário. Seleciona apenas correspondências exatas de pedido, referência ou checkout e consulta cada ID novamente em `/api/ConsultaTransacao`. A lista nunca confirma crédito diretamente, e CPF/valor/método seguem obrigatórios. CPF e valor iguais, sozinhos, não identificam um pagamento. Se a API não devolver uma correspondência ou o resultado estiver indisponível/incompleto, a tentativa continua pendente ou em conferência, e o administrador pode informar o ID completo da transação. Essa consulta não cria checkout nem libera outra cobrança.
 
 As mensagens indicam qual campo falhou: ID, pedido, referência, checkout, CPF, valor ou método. O CPF completo e a resposta bruta da API não são incluídos no diagnóstico. Uma conciliação bem-sucedida também limpa o erro antigo do retorno para que o painel não continue mostrando uma falha já resolvida.
 
@@ -208,6 +218,7 @@ php tests/management.php
 php tests/dashboard.php
 php tests/installments.php
 php tests/manual.php
+php tests/production.php
 npm install
 npx playwright install chromium
 npm test
