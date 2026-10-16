@@ -2,7 +2,7 @@
 Contributors: paulommaeda
 Requires at least: 6.4
 Requires PHP: 8.1
-Stable tag: 1.3.0
+Stable tag: 1.4.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -14,6 +14,13 @@ Use [inscricao_eventos evento="1"] em uma página. A ativação cria o modelo do
 Use [inscricao_eventos_dashboard evento="1"] para o dashboard privado da organização.
 
 == Changelog ==
+= 1.4.0 =
+* Baixa manual e reversão exclusivas de administradores, com valor, data, meio, comprovante/motivo e histórico do responsável.
+* Recebimentos externos e baixas provisórias vinculadas a tentativas K8, sem transações fictícias nem crédito duplicado no retorno.
+* Saldo, dashboard e CSV discriminam créditos K8 e baixas manuais ativas.
+* Perfil Gerente de Eventos para consultar eventos, inscrições, financeiro e exportar CSV, sem alterar dados, configurações ou pagamentos.
+* Permissões verificadas no servidor e testes de baixa/reversão, conciliação, rollback, acesso e telas no celular.
+
 = 1.3.0 =
 * Inscrições iniciadas por PIX podem quitar o saldo restante no cartão habilitado no evento.
 * Limite do lote reduz uma parcela a cada mês completo desde a inscrição, até o mínimo de 1x.

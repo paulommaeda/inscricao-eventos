@@ -14,13 +14,13 @@ final class Dashboard
     }
     public static function permission()
     {
-        return current_user_can('manage_options') ? true : new \WP_Error('ie_dashboard_forbidden', 'Entre com uma conta administradora para acessar o dashboard.', ['status' => 403]);
+        return Access::canView() ? true : new \WP_Error('ie_dashboard_forbidden', 'Entre com uma conta administradora ou gerente de eventos para acessar o dashboard.', ['status' => 403]);
     }
     public static function endpoint(\WP_REST_Request $request): \WP_REST_Response
     {
         // WordPress validates the authenticated cookie and wp_rest nonce before the route.
-        if (!current_user_can('manage_options')) {
-            $response = new \WP_REST_Response(['message' => 'Acesso restrito a administradores.'], 403);
+        if (!Access::canView()) {
+            $response = new \WP_REST_Response(['message' => 'Acesso restrito a administradores e gerentes de eventos.'], 403);
             $response->header('Cache-Control', 'no-store, private, max-age=0'); return $response;
         }
         return Api::respond(static fn() => Reports::dashboard($request->get_query_params()));
@@ -29,9 +29,9 @@ final class Dashboard
     {
         if (!defined('DONOTCACHEPAGE')) { define('DONOTCACHEPAGE', true); }
         if (!headers_sent()) { nocache_headers(); }
-        if (!current_user_can('manage_options')) {
+        if (!Access::canView()) {
             $link = is_user_logged_in() ? '' : ' <a href="' . esc_url(wp_login_url(get_permalink())) . '">Entrar no WordPress</a>';
-            return '<div class="ie-dashboard-access"><p>Dashboard restrito a administradores.' . $link . '</p></div>';
+            return '<div class="ie-dashboard-access"><p>Dashboard restrito a administradores e gerentes de eventos.' . $link . '</p></div>';
         }
         $a = shortcode_atts(['evento' => '0', 'id' => '0'], $attributes);
         wp_enqueue_style('ie-dashboard', plugins_url('assets/dashboard.css', IE_FILE), [], IE_VERSION);

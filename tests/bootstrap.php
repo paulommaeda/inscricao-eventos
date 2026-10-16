@@ -2,7 +2,7 @@
 /** Isolated WordPress / gateway doubles. No real payments or emails are sent. */
 define('ABSPATH', __DIR__ . '/');
 define('ARRAY_A', 'ARRAY_A');
-define('IE_VERSION', '1.3.0');
+define('IE_VERSION', '1.4.0');
 define('DAY_IN_SECONDS', 86400); define('HOUR_IN_SECONDS', 3600);
 $GLOBALS['test_options'] = []; $GLOBALS['test_transients'] = []; $GLOBALS['http_queue'] = []; $GLOBALS['http_calls'] = [];
 function wp_salt($scheme) { return 'local-test-salt-never-a-production-secret'; }
@@ -67,6 +67,7 @@ final class TestDB
     public bool $failSum = false;
     public ?string $failDelete = null;
     public bool $failReport = false;
+    public ?string $failInsert = null;
     public string $last_error = '';
     public function esc_like($value) { return addcslashes((string) $value, '_%\\'); }
     public function prepare($sql, ...$values) {
@@ -74,6 +75,7 @@ final class TestDB
         return preg_replace_callback('/%[ds]/', static function ($m) use (&$values) { $v = array_shift($values); return $m[0] === '%d' ? (string) (int) $v : "'" . str_replace("'", "''", (string) $v) . "'"; }, $sql);
     }
     public function insert($table, $data) {
+        if ($this->failInsert === $table) { $this->failInsert = null; return false; }
         if ($table === 'wp_ie_transactions') foreach ($this->rows[$table] ?? [] as $r) if ($r['scope'] === $data['scope'] && $r['remote_id'] === $data['remote_id']) return false;
         if ($table === 'wp_ie_registrations') foreach ($this->rows[$table] ?? [] as $r) if ($r['event_id'] === $data['event_id'] && $r['scope'] === $data['scope'] && $r['cpf_hash'] === $data['cpf_hash']) return false;
         $id = ($this->seq[$table] ?? 0) + 1; $this->seq[$table] = $id; $this->insert_id = $id;
@@ -97,6 +99,7 @@ final class TestDB
     }
     public function get_var($sql) {
         if ($this->failSum && str_contains($sql, 'SUM(')) { $this->failSum = false; return null; }
+        if (str_contains($sql, '/* ie-ledger */')) { $row = $this->get_row($sql); return $row ? reset($row) : null; }
         if (str_contains($sql, 'GET_LOCK')) return $this->failLock ? 0 : 1;
         if (str_contains($sql, 'RELEASE_LOCK')) return 1;
         if (str_contains($sql, 'SUM(t.credit)')) {
@@ -108,7 +111,8 @@ final class TestDB
     }
     public function get_row($sql, $output = null) { return $this->get_results($sql, $output)[0] ?? null; }
     public function get_results($sql, $output = null) {
-        if (str_contains($sql, '/* ie-report */')) {
+        if (str_contains($sql, '/* ie-report */') || str_contains($sql, '/* ie-ledger */')) {
+            if ($this->failSum && str_contains($sql, 'SUM(')) { $this->failSum = false; return null; }
             if ($this->failReport) { $this->failReport = false; return null; }
             // Execute the production SELECT against a real SQL engine, rather than mimic reports in PHP.
             $process = proc_open(['python3', __DIR__ . '/report-sql.py'], [['pipe', 'r'], ['pipe', 'w'], ['pipe', 'w']], $pipes);
@@ -139,4 +143,4 @@ final class TestDB
     }
 }
 $GLOBALS['wpdb'] = new TestDB();
-foreach (['Domain', 'Security', 'Store', 'Gateway', 'Payments'] as $class) require_once dirname(__DIR__) . '/includes/' . $class . '.php';
+foreach (['Domain', 'Security', 'Access', 'Store', 'Gateway', 'Manual', 'Payments'] as $class) require_once dirname(__DIR__) . '/includes/' . $class . '.php';

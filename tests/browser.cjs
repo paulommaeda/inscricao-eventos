@@ -125,6 +125,14 @@ function makeAccount(method = 'Pix', paid = 10000) {
     account = makeAccount(); account.registration_status = registration_status; account.payments.unshift({ id: 9, amount: 5000, state: 'pending', method: 'Pix', created_at: '2026-10-20 12:00:00', url: 'https://sandbox.meuk8.com.br/PagamentosUI/checkout?id=test-only' });
     await page.goto(base); await page.locator('.ie-account').waitFor(); assert.equal(await page.locator('[data-form="pay"]').count(), 0); assert.equal(await page.locator('.ie-account a[href*="meuk8"]').count(), 0); assert.match(await page.locator('.ie-account').textContent(), registration_status === 'deleted' ? /Inscrição excluída/ : /Inscrição cancelada/);
   }
+  // Participant receives a clear manual source, without a way to create/reverse an administrative receipt.
+  account = makeAccount('Pix', 49000); account.payments = []; account.manual_paid = 49000; account.gateway_paid = 0;
+  account.manual_payments = [{ id: 1, payment_id: 0, amount: 49000, method: 'Dinheiro', paid_on: '2026-10-20', status: 'active' }];
+  await page.goto(base); await page.locator('.ie-success').waitFor(); assert.match(await page.locator('.ie-history').textContent(), /Baixa manual.*Dinheiro/);
+  assert(!await page.locator('.ie-history').textContent().then(text => text.includes('Aguardando seu primeiro pagamento')));
+  assert.equal(await page.getByRole('button', { name: /Registrar baixa|Reverter baixa/ }).count(), 0);
+  account.paid = 0; account.balance = 49000; account.can_pay = true; account.manual_paid = 0; account.manual_payments[0].status = 'reversed';
+  await page.locator('[data-action="refresh"]').click(); await page.locator('[data-form="pay"]').waitFor(); assert.match(await page.locator('.ie-history').textContent(), /Revertida/);
   // Unknown dates keep registrations closed while the CPF consultation remains available.
   account = null; quote = { ...event, active_lot: null, open: false, event_date: '', notice: 'Prévia: defina a data do evento.' };
   await page.goto(base); await page.locator('.ie-notice').waitFor(); assert.equal(await page.locator('[data-form="register"]').count(), 0);

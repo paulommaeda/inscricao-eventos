@@ -15,9 +15,11 @@ final class Plugin
         add_action('plugins_loaded', static function () {
             // Auto-updated code may receive a callback before an administrator opens the dashboard.
             if (get_option('ie_schema_version') !== IE_VERSION) { Store::install(); }
+            Access::install();
         }, 5);
         add_action('admin_init', static function () {
             if (get_option('ie_schema_version') !== IE_VERSION) { Store::install(); }
+            Access::install();
             self::schedule();
         });
     }
@@ -29,7 +31,7 @@ final class Plugin
     {
         if (!extension_loaded('openssl')) { wp_die('Inscrição de Eventos precisa da extensão OpenSSL do PHP.'); }
         try {
-            Store::install();
+            Store::install(); Access::install();
             if (!get_option('ie_sample_created')) {
                 $id = Store::saveEvent(Store::sample());
                 $page = wp_insert_post(['post_type' => 'page', 'post_status' => 'publish', 'post_title' => 'Inscrições do retiro', 'post_content' => '[inscricao_eventos evento="' . $id . '"]'], true);

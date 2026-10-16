@@ -6,7 +6,7 @@ require_once dirname(__DIR__) . '/includes/Api.php';
 require_once dirname(__DIR__) . '/includes/Dashboard.php';
 require_once dirname(__DIR__) . '/includes/Admin.php';
 $GLOBALS['test_admin'] = true;
-function current_user_can($capability) { return $GLOBALS['test_admin'] && $capability === 'manage_options'; }
+function current_user_can($capability) { return ($GLOBALS['test_admin'] && in_array($capability, ['manage_options', 'ie_view_events', 'read'], true)) || (!empty($GLOBALS['test_manager']) && in_array($capability, ['ie_view_events', 'read'], true)); }
 function wp_die($message) { throw new RuntimeException((string) $message); }
 function wp_unslash($value) { return is_array($value) ? array_map('wp_unslash', $value) : stripslashes((string) $value); }
 function sanitize_key($value) { return preg_replace('/[^a-z0-9_\-]/', '', strtolower((string) $value)); }
@@ -30,3 +30,10 @@ function wp_enqueue_style(...$args) { $GLOBALS['test_styles'][$args[0]] = $args;
 function wp_enqueue_script(...$args) { $GLOBALS['test_scripts'][$args[0]] = $args; }
 function wp_add_inline_script($handle, $content, $position) { $GLOBALS['test_inline'][$handle] = $content; }
 if (!defined('IE_FILE')) define('IE_FILE', dirname(__DIR__) . '/inscricao-eventos.php');
+
+class TestRole {
+    public function __construct(public string $name, public array $capabilities = []) {}
+    public function add_cap($key, $value = true) { $this->capabilities[$key] = $value; }
+}
+function get_role($name) { return $GLOBALS['test_roles'][$name] ?? null; }
+function add_role($name, $label, $capabilities) { if (get_role($name)) return null; return $GLOBALS['test_roles'][$name] = new TestRole($name, $capabilities); }

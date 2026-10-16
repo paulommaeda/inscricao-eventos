@@ -2,7 +2,7 @@
 namespace InscricaoEventos;
 if (!defined('ABSPATH')) { exit; }
 
-/** Read-only reports. Money is always the frozen contract and the verified transaction ledger. */
+/** Read-only reports. Money combines the frozen contract, verified K8 ledger and audited administrator receipts. */
 final class Reports
 {
     public static function filters(array $input): array
@@ -37,7 +37,7 @@ final class Reports
         $paid = 'COALESCE(b.paid,0)';
         $states = ['pending' => "$paid=0", 'partial' => "$paid>0 AND $paid<r.total", 'paid' => "$paid>=r.total", 'overpaid' => "$paid>r.total"];
         if ($f['status']) { $where[] = '(' . $states[$f['status']] . ')'; }
-        $from = "FROM $r r JOIN $e e ON e.id=r.event_id LEFT JOIN (SELECT p.registration_id,SUM(t.credit) paid FROM $p p JOIN $t t ON t.payment_id=p.id GROUP BY p.registration_id) b ON b.registration_id=r.id LEFT JOIN (SELECT registration_id,SUM(CASE WHEN state IN ('creating','pending') THEN 1 ELSE 0 END) open_attempts,SUM(CASE WHEN state='review' THEN 1 ELSE 0 END) review_attempts,SUM(CASE WHEN state='canceling' THEN 1 ELSE 0 END) cancel_attempts,SUM(CASE WHEN last_error<>'' OR webhook_error<>'' THEN 1 ELSE 0 END) error_attempts FROM $p GROUP BY registration_id) a ON a.registration_id=r.id " . $extraJoins . ' WHERE ' . implode(' AND ', $where);
+        $from = "FROM $r r JOIN $e e ON e.id=r.event_id LEFT JOIN (SELECT registration_id,SUM(credit) paid,SUM(gateway_credit) gateway_paid,SUM(manual_credit) manual_paid FROM (" . Store::creditLinesSQL() . ") credits GROUP BY registration_id) b ON b.registration_id=r.id LEFT JOIN (SELECT registration_id,SUM(CASE WHEN state IN ('creating','pending') THEN 1 ELSE 0 END) open_attempts,SUM(CASE WHEN state='review' THEN 1 ELSE 0 END) review_attempts,SUM(CASE WHEN state='canceling' THEN 1 ELSE 0 END) cancel_attempts,SUM(CASE WHEN last_error<>'' OR webhook_error<>'' THEN 1 ELSE 0 END) error_attempts FROM $p GROUP BY registration_id) a ON a.registration_id=r.id " . $extraJoins . ' WHERE ' . implode(' AND ', $where);
         return [$from, $args];
     }
     private static function read(string $sql, array $args = []): array
@@ -50,11 +50,11 @@ final class Reports
     public static function rows(array $f, int $limit, int $offset): array
     {
         [$from, $args] = self::query($f);
-        return self::read('SELECT r.*,e.name event_name,COALESCE(b.paid,0) paid,COALESCE(a.review_attempts,0) review_attempts,COALESCE(a.cancel_attempts,0) cancel_attempts,COALESCE(a.error_attempts,0) error_attempts ' . $from . ' ORDER BY r.id DESC LIMIT %d OFFSET %d', array_merge($args, [max(1, min(250, $limit)), max(0, $offset)]));
+        return self::read('SELECT r.*,e.name event_name,COALESCE(b.paid,0) paid,COALESCE(b.gateway_paid,0) gateway_paid,COALESCE(b.manual_paid,0) manual_paid,COALESCE(a.review_attempts,0) review_attempts,COALESCE(a.cancel_attempts,0) cancel_attempts,COALESCE(a.error_attempts,0) error_attempts ' . $from . ' ORDER BY r.id DESC LIMIT %d OFFSET %d', array_merge($args, [max(1, min(250, $limit)), max(0, $offset)]));
     }
     private static function sums(): string
     {
-        return 'COUNT(*) count,COALESCE(SUM(r.total),0) total,COALESCE(SUM(COALESCE(b.paid,0)),0) paid,COALESCE(SUM(GREATEST(r.total-COALESCE(b.paid,0),0)),0) balance,COALESCE(SUM(GREATEST(COALESCE(b.paid,0)-r.total,0)),0) overpaid,COALESCE(SUM(CASE WHEN COALESCE(b.paid,0)>=r.total THEN r.total ELSE COALESCE(b.paid,0) END),0) covered';
+        return 'COUNT(*) count,COALESCE(SUM(r.total),0) total,COALESCE(SUM(COALESCE(b.paid,0)),0) paid,COALESCE(SUM(COALESCE(b.gateway_paid,0)),0) gateway_paid,COALESCE(SUM(COALESCE(b.manual_paid,0)),0) manual_paid,COALESCE(SUM(GREATEST(r.total-COALESCE(b.paid,0),0)),0) balance,COALESCE(SUM(GREATEST(COALESCE(b.paid,0)-r.total,0)),0) overpaid,COALESCE(SUM(CASE WHEN COALESCE(b.paid,0)>=r.total THEN r.total ELSE COALESCE(b.paid,0) END),0) covered';
     }
     public static function metrics(array $f): array
     {
@@ -87,15 +87,15 @@ final class Reports
         }, $rows);
         $lots = self::read('SELECT r.event_id,e.name event_name,r.lot_name label,' . self::sums() . ' ' . $from . ' GROUP BY r.event_id,e.name,r.lot_name ORDER BY r.event_id,r.lot_name', $args);
         $methods = self::read('SELECT r.method label,' . self::sums() . ' ' . $from . ' GROUP BY r.method ORDER BY r.method', $args);
-        [$receiptFrom, $receiptArgs] = self::query($f, ' JOIN ' . Store::table('payments') . ' rp ON rp.registration_id=r.id JOIN ' . Store::table('transactions') . ' rt ON rt.payment_id=rp.id');
-        $receipts = self::read('SELECT rp.method label,COUNT(DISTINCT r.id) count,COALESCE(SUM(rt.credit),0) paid ' . $receiptFrom . ' AND rt.credit>0 GROUP BY rp.method ORDER BY rp.method', $receiptArgs);
+        [$receiptFrom, $receiptArgs] = self::query($f, ' JOIN (' . Store::creditLinesSQL() . ') rp ON rp.registration_id=r.id');
+        $receipts = self::read('SELECT rp.method label,COUNT(DISTINCT r.id) count,COALESCE(SUM(rp.credit),0) paid,COALESCE(SUM(rp.gateway_credit),0) gateway_paid,COALESCE(SUM(rp.manual_credit),0) manual_paid ' . $receiptFrom . ' AND rp.credit>0 GROUP BY rp.method ORDER BY rp.method', $receiptArgs);
         $timeline = array_reverse(self::read('SELECT DATE(r.created_at) label,COUNT(*) count ' . $from . ' GROUP BY DATE(r.created_at) ORDER BY label DESC LIMIT 30', $args));
-        $normalize = static function ($row) { foreach (['count', 'total', 'paid', 'balance', 'overpaid', 'covered', 'event_id'] as $key) { if (isset($row[$key])) { $row[$key] = (int) $row[$key]; } } return $row; };
+        $normalize = static function ($row) { foreach (['count', 'total', 'paid', 'gateway_paid', 'manual_paid', 'balance', 'overpaid', 'covered', 'event_id'] as $key) { if (isset($row[$key])) { $row[$key] = (int) $row[$key]; } } return $row; };
         // Lot choices retain the names frozen in existing registrations, even after lot edits.
         $choices = $f; $choices['q'] = ''; $choices['lot'] = ''; $choices['status'] = ''; $choices['method'] = ''; $choices['start'] = ''; $choices['end'] = ''; $choices['registration_status'] = 'all';
         [$choiceFrom, $choiceArgs] = self::query($choices);
         $lotNames = array_column(self::read('SELECT DISTINCT r.lot_name label ' . $choiceFrom . ' ORDER BY r.lot_name', $choiceArgs), 'label');
         if ($event) { $lotNames = array_values(array_unique(array_merge($lotNames, array_column(Store::lots((int) $event['id']), 'name')))); }
-        return ['filters' => $f, 'event' => $event ? array_intersect_key($event, array_flip(['id', 'name', 'location', 'event_date', 'registration_start', 'registration_end', 'payment_deadline', 'timezone', 'status', 'primary_color', 'accent_color', 'logo_url'])) : null, 'calendar' => $event ? self::calendar($event) : null, 'events' => array_map(static fn($e) => ['id' => (int) $e['id'], 'name' => $e['name']], Store::events()), 'lot_options' => $lotNames, 'metrics' => $metrics, 'lots' => array_map($normalize, $lots), 'methods' => array_map($normalize, $methods), 'receipts' => array_map($normalize, $receipts), 'timeline' => array_map($normalize, $timeline), 'registrations' => $registrations, 'pagination' => ['page' => $page, 'pages' => $pages, 'total' => $metrics['count'], 'per_page' => 25], 'scope_notice' => $f['all_scopes'] ? 'Todas as contas e ambientes K8' : 'Conta e ambiente K8 atuais', 'date_timezone' => $event['timezone'] ?? 'UTC', 'cron_error' => Domain::cut(sanitize_text_field((string) get_option('ie_cron_error', '')), 500), 'updated_at' => gmdate('c')];
+        return ['filters' => $f, 'event' => $event ? array_intersect_key($event, array_flip(['id', 'name', 'location', 'event_date', 'registration_start', 'registration_end', 'payment_deadline', 'timezone', 'status', 'primary_color', 'accent_color', 'logo_url'])) : null, 'calendar' => $event ? self::calendar($event) : null, 'events' => array_map(static fn($e) => ['id' => (int) $e['id'], 'name' => $e['name']], Store::events()), 'lot_options' => $lotNames, 'metrics' => $metrics, 'lots' => array_map($normalize, $lots), 'methods' => array_map($normalize, $methods), 'receipts' => array_map($normalize, $receipts), 'timeline' => array_map($normalize, $timeline), 'registrations' => $registrations, 'pagination' => ['page' => $page, 'pages' => $pages, 'total' => $metrics['count'], 'per_page' => 25], 'scope_notice' => $f['all_scopes'] ? 'Todas as contas e ambientes K8' : 'Conta e ambiente K8 atuais', 'can_manage' => Access::canManage(), 'date_timezone' => $event['timezone'] ?? 'UTC', 'cron_error' => Domain::cut(sanitize_text_field((string) get_option('ie_cron_error', '')), 500), 'updated_at' => gmdate('c')];
     }
 }

@@ -6,7 +6,7 @@
   const number = new Intl.NumberFormat('pt-BR');
   const money = value => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value || 0) / 100);
   const day = value => value ? value.split('-').reverse().join('/') : 'A definir';
-  const labels = { pending: 'Sem pagamento', partial: 'Parcial', paid: 'Quitada', active: 'Ativa', cancelled: 'Cancelada', deleted: 'Lixeira', Pix: 'PIX', Cartao: 'Cartão' };
+  const labels = { Dinheiro: 'Dinheiro', Transferencia: 'Transferência', Outro: 'Outro', pending: 'Sem pagamento', partial: 'Parcial', paid: 'Quitada', active: 'Ativa', cancelled: 'Cancelada', deleted: 'Lixeira', Pix: 'PIX', Cartao: 'Cartão' };
   const options = (items, selected) => items.map(([v, text]) => `<option value="${esc(v)}" ${String(v) === String(selected) ? 'selected' : ''}>${esc(text)}</option>`).join('');
   const countdown = days => days === null ? 'A definir' : days < 0 ? `Há ${Math.abs(days)} dias` : days === 0 ? 'Hoje' : `${days} dias`;
   const metric = (label, value, note, cls = '') => `<article class="ied-metric ${cls}"><span>${esc(label)}</span><strong>${esc(value)}</strong><small>${esc(note)}</small></article>`;
@@ -65,10 +65,10 @@
         <div class="ied-metrics">
           ${metric('Inscrições', number.format(m.count), `${number.format(m.paid_count)} quitadas · ${number.format(m.partial)} parciais`)}
           ${metric('Valor das inscrições', money(m.total), 'Preço contratado em cada lote')}
-          ${metric('Recebido / confirmado', money(m.paid), 'Créditos conferidos pelo K8', 'ied-metric-received')}
+          ${metric('Recebido / registrado', money(m.paid), `${money(m.gateway_paid)} K8 · ${money(m.manual_paid)} manual`, 'ied-metric-received')}
           ${metric('A receber', money(m.balance), `${number.format(m.pending + m.partial)} inscrições com saldo`, 'ied-metric-due')}
         </div>
-        <p class="ied-hint ied-finance-note">Todos os indicadores seguem os filtros acima. Cartão aprovado é contado pelo valor integral, mesmo que o banco ainda liquide as parcelas. Excedentes não quitam outras inscrições.</p>
+        <p class="ied-hint ied-finance-note">Todos os indicadores seguem os filtros acima e incluem baixas manuais ativas identificadas pela organização. Cartão aprovado é contado pelo valor integral, mesmo que o banco ainda liquide as parcelas. Excedentes não quitam outras inscrições.</p>
         <div class="ied-overview">
           <article class="ied-panel ied-collection"><div class="ied-section-title"><h3>Quitação do valor contratado</h3><strong>${number.format(m.progress)}%</strong></div>${progress(m.progress, 'Percentual quitado do valor contratado')}<div class="ied-key"><span><i class="ied-dot ied-dot-paid"></i>${money(m.covered)} quitados</span><span><i class="ied-dot ied-dot-pending"></i>${money(m.balance)} a receber</span></div>
             <div class="ied-operational"><div><small>Inscrições</small><b>${c ? c.open ? 'Abertas' : 'Fechadas' : 'Por evento'}</b></div><div><small>Lote vigente</small><b>${esc(c?.active_lot?.name || 'Nenhum')}</b></div><div><small>Prazo de quitação</small><b>${esc(c ? countdown(c.deadline_days) : 'Por evento')}</b></div></div>
@@ -79,18 +79,18 @@
         ${warnings.length || result.cron_error ? `<aside class="ied-alerts" aria-label="Pendências"><h3>Atenção da organização</h3>${warnings.map(([count, label, note]) => `<div><b>${number.format(count)} · ${esc(label)}</b><span>${esc(note)}</span></div>`).join('')}${result.cron_error ? `<div><b>Conciliação automática</b><span>${esc(result.cron_error)}</span></div>` : ''}</aside>` : ''}
         <div class="ied-breakdowns">
           <article class="ied-panel"><h3>Financeiro por lote</h3><div class="ied-lot-list">${result.lots.length ? result.lots.map(lot => `<div><div class="ied-section-title"><b>${esc(lot.label)}${!e ? `<small>${esc(lot.event_name)}</small>` : ''}</b><span>${number.format(lot.count)} inscrições</span></div>${progress(percent(lot.covered, lot.total), `Quitação ${lot.label}`)}<div class="ied-lot-values"><span>Recebido <b>${esc(money(lot.paid))}</b></span><span>A receber <b>${esc(money(lot.balance))}</b></span></div></div>`).join('') : '<p class="ied-empty">Nenhum lote nos filtros selecionados.</p>'}</div></article>
-          <article class="ied-panel"><h3>Recebimentos por meio</h3>${result.receipts.length ? result.receipts.map(method => `<div class="ied-method"><div class="ied-section-title"><b>${esc(labels[method.label] || method.label)}</b><span>${number.format(method.count)} inscrições com recebimento</span></div><strong>${esc(money(method.paid))}<small>recebidos / confirmados</small></strong></div>`).join('') : '<p class="ied-empty">Nenhum recebimento confirmado nestes filtros.</p>'}</article>
+          <article class="ied-panel"><h3>Recebimentos por meio</h3>${result.receipts.length ? result.receipts.map(method => `<div class="ied-method"><div class="ied-section-title"><b>${esc(labels[method.label] || method.label)}</b><span>${number.format(method.count)} inscrições com recebimento</span></div><strong>${esc(money(method.paid))}<small>${esc(money(method.gateway_paid))} K8 · ${esc(money(method.manual_paid))} manual</small></strong></div>`).join('') : '<p class="ied-empty">Nenhum recebimento confirmado nestes filtros.</p>'}</article>
           <article class="ied-panel"><h3>Evolução das inscrições</h3><p class="ied-hint">Últimos 30 dias com cadastros · UTC</p>${result.timeline.length ? `<div class="ied-timeline" role="img" aria-label="${esc(result.timeline.map(item => `${day(item.label)}: ${item.count} inscrições`).join('; '))}">${result.timeline.map(item => `<span title="${esc(day(item.label))}: ${item.count} inscrições"><i style="height:${percent(item.count, maxDay)}%"></i></span>`).join('')}</div><div class="ied-chart-dates"><span>${esc(day(result.timeline[0].label))}</span><span>${esc(day(result.timeline.at(-1).label))}</span></div>` : '<p class="ied-empty">Os cadastros aparecerão aqui.</p>'}</article>
         </div>
         <article class="ied-panel ied-registration-panel"><div class="ied-section-title"><h3>Inscrições</h3><span>${number.format(m.count)} resultado${m.count === 1 ? '' : 's'}</span></div>
           <div class="ied-table-wrap"><table><thead><tr><th>Participante</th><th>Lote / forma do cadastro</th><th>Valor</th><th>Recebido</th><th>A receber</th><th>Situação</th><th>Cadastro</th><th>Ações</th></tr></thead><tbody>
             ${result.registrations.length ? result.registrations.map(r => {
               const created = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: result.date_timezone }).format(new Date(r.created_at.replace(' ', 'T') + 'Z'));
-              return `<tr><td><b>${esc(r.name)}</b><small>#${r.id} · ${esc(r.email)}</small><small>${esc(r.phone)}</small>${!e ? `<small>${esc(r.event_name)}</small>` : ''}</td><td>${esc(r.lot_name)}<small>${esc(labels[r.method] || r.method)}</small></td><td>${esc(money(r.total))}</td><td class="ied-money-paid">${esc(money(r.paid))}${r.overpaid ? `<small>Excedente ${esc(money(r.overpaid))}</small>` : ''}</td><td>${esc(money(r.balance))}</td><td><span class="ied-badge ied-badge-${esc(r.status)}">${esc(r.overpaid ? 'Excedente' : labels[r.status] || r.status)}</span><small>${esc(labels[r.registration_status] || r.registration_status)}${r.alerts ? ' · Conferir pendência' : ''}</small></td><td>${esc(created)}</td><td><a class="ied-button" href="${esc(r.detail_url)}">Detalhes / editar</a></td></tr>`;
+              return `<tr><td><b>${esc(r.name)}</b><small>#${r.id} · ${esc(r.email)}</small><small>${esc(r.phone)}</small>${!e ? `<small>${esc(r.event_name)}</small>` : ''}</td><td>${esc(r.lot_name)}<small>${esc(labels[r.method] || r.method)}</small></td><td>${esc(money(r.total))}</td><td class="ied-money-paid">${esc(money(r.paid))}${r.overpaid ? `<small>Excedente ${esc(money(r.overpaid))}</small>` : ''}</td><td>${esc(money(r.balance))}</td><td><span class="ied-badge ied-badge-${esc(r.status)}">${esc(r.overpaid ? 'Excedente' : labels[r.status] || r.status)}</span><small>${esc(labels[r.registration_status] || r.registration_status)}${r.alerts ? ' · Conferir pendência' : ''}</small></td><td>${esc(created)}</td><td><a class="ied-button" href="${esc(r.detail_url)}">${result.can_manage ? 'Detalhes / editar' : 'Consultar detalhes'}</a></td></tr>`;
             }).join('') : '<tr><td colspan="8" class="ied-empty">Nenhuma inscrição para estes filtros.</td></tr>'}
           </tbody></table></div>
           <div class="ied-pagination"><button type="button" class="ied-button" data-page="${result.pagination.page - 1}" ${result.pagination.page === 1 ? 'disabled' : ''}>Anterior</button><span>Página ${result.pagination.page} de ${result.pagination.pages}</span><button type="button" class="ied-button" data-page="${result.pagination.page + 1}" ${result.pagination.page >= result.pagination.pages ? 'disabled' : ''}>Próxima</button></div>
-        </article><footer class="ied-footer">Painel restrito a administradores. <a href="${esc(config.eventsUrl)}">Gerenciar eventos e lotes</a></footer>`;
+        </article><footer class="ied-footer">${result.can_manage ? 'Perfil administrador' : 'Gerente de Eventos · somente consulta'}. <a href="${esc(config.eventsUrl)}">${result.can_manage ? 'Gerenciar' : 'Consultar'} eventos e lotes</a></footer>`;
     }
     function formFilters() {
       const values = Object.fromEntries(new FormData(root.querySelector('.ied-filters')));
@@ -107,7 +107,7 @@
         Object.entries(filters).forEach(([key, value]) => url.searchParams.set(key, String(value)));
         const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', headers: { 'X-WP-Nonce': config.nonce, Accept: 'application/json' }, signal: active.signal });
         const result = await response.json();
-        if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? 'Sua sessão expirou ou não possui acesso. Entre como administrador e recarregue a página.' : result.message || 'Não foi possível carregar o dashboard.');
+        if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? 'Sua sessão expirou ou não possui acesso. Entre como administrador ou gerente de eventos e recarregue a página.' : result.message || 'Não foi possível carregar o dashboard.');
         applied = { ...result.filters, page: result.pagination.page }; render(result);
         root.querySelector('.ied-message').textContent = 'Dashboard atualizado.';
       } catch (error) {

@@ -125,6 +125,25 @@ final class Store
                 PRIMARY KEY  (id),
                 UNIQUE KEY scope_remote (scope,remote_id),
                 KEY payment_id (payment_id)",
+            'manuals' => "id bigint unsigned NOT NULL AUTO_INCREMENT,
+                registration_id bigint unsigned NOT NULL,
+                payment_id bigint unsigned NOT NULL DEFAULT 0,
+                amount bigint NOT NULL,
+                method varchar(20) NOT NULL,
+                paid_on varchar(10) NOT NULL,
+                note text NOT NULL,
+                request_key char(64) NOT NULL,
+                actor_id bigint unsigned NOT NULL,
+                created_at datetime NOT NULL,
+                reversed_at datetime DEFAULT NULL,
+                reversed_by bigint unsigned NOT NULL DEFAULT 0,
+                reverse_note text NOT NULL,
+                resolved_at datetime DEFAULT NULL,
+                resolved_state varchar(50) NOT NULL DEFAULT '',
+                PRIMARY KEY  (id),
+                UNIQUE KEY request_key (request_key),
+                KEY registration_id (registration_id),
+                KEY payment_active (payment_id,reversed_at,resolved_at)",
             'audit' => "id bigint unsigned NOT NULL AUTO_INCREMENT,
                 registration_id bigint unsigned NOT NULL,
                 payment_id bigint unsigned NOT NULL DEFAULT 0,
@@ -151,7 +170,7 @@ final class Store
             $engine = $wpdb->get_row($wpdb->prepare('SHOW TABLE STATUS WHERE Name=%s', $table), ARRAY_A);
             if (strtolower($engine['Engine'] ?? '') !== 'innodb') { throw new \RuntimeException('O plugin precisa de tabelas InnoDB para proteger as operações financeiras.'); }
         }
-        foreach (['registrations' => ['status', 'admin_note', 'updated_at', 'deleted_at'], 'payments' => ['max_installments', 'cpf_snapshot', 'diagnostic_json', 'remote_id_hint', 'webhook_at', 'webhook_error'], 'transactions' => ['cancel_status', 'cancel_operation', 'cancel_requested_at', 'cancel_error', 'cancel_actor']] as $name => $required) {
+        foreach (['registrations' => ['status', 'admin_note', 'updated_at', 'deleted_at'], 'payments' => ['max_installments', 'cpf_snapshot', 'diagnostic_json', 'remote_id_hint', 'webhook_at', 'webhook_error'], 'manuals' => ['registration_id', 'payment_id', 'request_key', 'reversed_at', 'resolved_at'], 'transactions' => ['cancel_status', 'cancel_operation', 'cancel_requested_at', 'cancel_error', 'cancel_actor']] as $name => $required) {
             $columns = $wpdb->get_col('SHOW COLUMNS FROM ' . self::table($name));
             if (!is_array($columns) || array_diff($required, $columns)) { throw new \RuntimeException('Não foi possível atualizar as colunas da tabela de ' . $name . '. Confira as permissões do banco.'); }
         }
@@ -185,16 +204,36 @@ final class Store
         global $wpdb; $p = $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . self::table('payments') . ' WHERE id=%d', $id), ARRAY_A);
         if (!$p) { throw new \RuntimeException('Pagamento não encontrado.'); } return $p;
     }
-    public static function paid(int $id): int
+    public static function paid(int $id): int { return self::creditTotals($id)['paid']; }
+    public static function creditTotals(int $id): array
     {
-        global $wpdb; $value = $wpdb->get_var($wpdb->prepare('SELECT COALESCE(SUM(t.credit),0) FROM ' . self::table('transactions') . ' t JOIN ' . self::table('payments') . ' p ON p.id=t.payment_id WHERE p.registration_id=%d', $id));
-        if ($value === null || !empty($wpdb->last_error)) { throw new \RuntimeException('Não foi possível conferir o saldo. Nenhuma nova cobrança foi criada.'); }
-        return (int) $value;
+        global $wpdb; $row = $wpdb->get_row($wpdb->prepare('/* ie-ledger */ SELECT COALESCE(SUM(q.credit),0) paid,COALESCE(SUM(q.gateway_credit),0) gateway_paid,COALESCE(SUM(q.manual_credit),0) manual_paid FROM (' . self::creditLinesSQL($id) . ') q WHERE q.registration_id=%d', $id), ARRAY_A);
+        if (!$row || !isset($row['paid'], $row['gateway_paid'], $row['manual_paid']) || !empty($wpdb->last_error)) { throw new \RuntimeException('Não foi possível conferir o saldo. Nenhuma nova cobrança foi criada.'); }
+        return array_map('intval', $row);
     }
-    public static function balance(array $r): array { return Domain::balance((int) $r['total'], self::paid((int) $r['id'])); }
+    public static function balance(array $r): array { $totals = self::creditTotals((int) $r['id']); return array_merge(Domain::balance((int) $r['total'], $totals['paid']), $totals); }
+    public static function creditLinesSQL(?int $registrationId = null): string
+    {
+        $p = self::table('payments'); $t = self::table('transactions'); $m = self::table('manuals');
+        $filter = $registrationId === null ? '' : ' AND registration_id=' . $registrationId;
+        $paymentFilter = $registrationId === null ? '' : ' WHERE p.registration_id=' . $registrationId;
+        $verifiedFrom = $registrationId === null ? "$t t" : "$t t JOIN $p vp ON vp.id=t.payment_id WHERE vp.registration_id=" . $registrationId;
+        return "SELECT p.registration_id,p.id payment_id,p.method,COALESCE(v.credit,0) gateway_credit,GREATEST(COALESCE(m.amount,0)-COALESCE(v.credit,0),0) manual_credit,GREATEST(COALESCE(v.credit,0),COALESCE(m.amount,0)) credit FROM $p p LEFT JOIN (SELECT t.payment_id,SUM(t.credit) credit FROM $verifiedFrom GROUP BY t.payment_id) v ON v.payment_id=p.id LEFT JOIN (SELECT payment_id,MAX(amount) amount FROM $m WHERE payment_id>0 AND reversed_at IS NULL AND resolved_at IS NULL $filter GROUP BY payment_id) m ON m.payment_id=p.id $paymentFilter UNION ALL SELECT registration_id,0 payment_id,method,0 gateway_credit,amount manual_credit,amount credit FROM $m WHERE payment_id=0 AND reversed_at IS NULL $filter";
+    }
+    public static function manuals(int $registrationId): array
+    {
+        global $wpdb; $rows = $wpdb->get_results($wpdb->prepare('SELECT * FROM ' . self::table('manuals') . ' WHERE registration_id=%d ORDER BY id DESC', $registrationId), ARRAY_A);
+        if ($rows === null || !empty($wpdb->last_error)) { throw new \RuntimeException('Não foi possível conferir as baixas manuais.'); }
+        return $rows;
+    }
+    public static function manual(int $id): array
+    {
+        global $wpdb; $row = $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . self::table('manuals') . ' WHERE id=%d', $id), ARRAY_A);
+        if (!$row || !empty($wpdb->last_error)) { throw new \RuntimeException('Baixa manual não encontrada.'); } return $row;
+    }
     public static function payments(int $id): array
     {
-        global $wpdb; $rows = $wpdb->get_results($wpdb->prepare('SELECT p.*,COALESCE((SELECT SUM(t.credit) FROM ' . self::table('transactions') . ' t WHERE t.payment_id=p.id),0) credit FROM ' . self::table('payments') . ' p WHERE p.registration_id=%d ORDER BY p.id DESC', $id), ARRAY_A);
+        global $wpdb; $rows = $wpdb->get_results($wpdb->prepare('/* ie-ledger */ SELECT p.*,q.credit,q.gateway_credit,q.manual_credit FROM ' . self::table('payments') . ' p JOIN (' . self::creditLinesSQL($id) . ') q ON q.payment_id=p.id WHERE p.registration_id=%d ORDER BY p.id DESC', $id), ARRAY_A);
         if ($rows === null || !empty($wpdb->last_error)) { throw new \RuntimeException('Não foi possível conferir as tentativas de pagamento. Tente novamente.'); }
         return $rows;
     }
@@ -220,10 +259,11 @@ final class Store
         $card = Domain::installments($r, $e); $methods = [];
         if ($e['allow_pix'] && $r['method'] === 'Pix') { $methods[] = 'Pix'; }
         if ($e['allow_card']) { $methods[] = 'Cartao'; }
-        $payments = array_map(static function ($p) use ($active) {
-            return ['id' => (int) $p['id'], 'amount' => (int) $p['amount'], 'credit' => (int) $p['credit'], 'method' => $p['method'], 'max_installments' => isset($p['max_installments']) ? (int) $p['max_installments'] : null, 'state' => $p['state'], 'created_at' => $p['created_at'], 'url' => $active && $p['state'] === 'pending' ? $p['checkout_url'] : '', 'error' => $p['state'] === 'review' ? 'Pagamento em conferência. Procure a organização antes de tentar novamente.' : ''];
+        $payments = array_map(static function ($p) use ($active, $b) {
+            return ['id' => (int) $p['id'], 'amount' => (int) $p['amount'], 'credit' => (int) $p['credit'], 'method' => $p['method'], 'manual_credit' => (int) $p['manual_credit'], 'max_installments' => isset($p['max_installments']) ? (int) $p['max_installments'] : null, 'state' => $p['state'], 'created_at' => $p['created_at'], 'url' => $active && $p['state'] === 'pending' && !$p['manual_credit'] && (int) $p['amount'] <= $b['balance'] ? $p['checkout_url'] : '', 'error' => $p['state'] === 'review' ? 'Pagamento em conferência. Procure a organização antes de tentar novamente.' : ''];
         }, self::payments((int) $r['id']));
-        return array_merge($b, ['id' => (int) $r['id'], 'event_id' => (int) $r['event_id'], 'event_name' => $e['name'], 'name' => Domain::firstName($r['name']), 'lot' => $r['lot_name'], 'method' => $r['method'], 'max_installments' => (int) $r['max_installments'], 'card_installments' => $card, 'payment_methods' => $methods, 'deadline' => $e['payment_deadline'], 'message' => str_replace('{data}', Domain::dateBR($e['payment_deadline']), $e['payment_message']), 'registration_status' => $r['status'] ?? 'active', 'payments' => $payments, 'can_pay' => $active && $b['balance'] > 0 && $e['status'] === 'published' && !empty($e['payment_deadline']) && $today <= $e['payment_deadline'] && (bool) $methods]);
+        $manuals = array_map(static fn($m) => ['id' => (int) $m['id'], 'payment_id' => (int) $m['payment_id'], 'amount' => (int) $m['amount'], 'method' => $m['method'], 'paid_on' => $m['paid_on'], 'status' => !empty($m['reversed_at']) ? 'reversed' : (!empty($m['resolved_at']) ? 'reconciled' : 'active')], self::manuals((int) $r['id']));
+        return array_merge($b, ['id' => (int) $r['id'], 'event_id' => (int) $r['event_id'], 'event_name' => $e['name'], 'name' => Domain::firstName($r['name']), 'lot' => $r['lot_name'], 'method' => $r['method'], 'max_installments' => (int) $r['max_installments'], 'card_installments' => $card, 'payment_methods' => $methods, 'deadline' => $e['payment_deadline'], 'message' => str_replace('{data}', Domain::dateBR($e['payment_deadline']), $e['payment_message']), 'registration_status' => $r['status'] ?? 'active', 'payments' => $payments, 'manual_payments' => $manuals, 'can_pay' => $active && $b['balance'] > 0 && $e['status'] === 'published' && !empty($e['payment_deadline']) && $today <= $e['payment_deadline'] && (bool) $methods]);
     }
     public static function sample(): array
     {

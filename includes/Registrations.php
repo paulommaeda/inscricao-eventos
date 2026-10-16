@@ -96,7 +96,7 @@ final class Registrations
     {
         global $wpdb;
         foreach (Store::payments($id) as $p) { Store::check($wpdb->delete(Store::table('transactions'), ['payment_id' => $p['id']])); }
-        foreach (['payments', 'sessions', 'audit'] as $table) { Store::check($wpdb->delete(Store::table($table), ['registration_id' => $id])); }
+        foreach (['manuals', 'payments', 'sessions', 'audit'] as $table) { Store::check($wpdb->delete(Store::table($table), ['registration_id' => $id])); }
         Store::check($wpdb->delete(Store::table('registrations'), ['id' => $id]));
     }
 }

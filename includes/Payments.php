@@ -311,6 +311,7 @@ final class Payments
         Store::begin();
         try {
             if ($existing) { Store::update('transactions', $row, ['id' => $existing['id']]); } else { Store::insert('transactions', $row); }
+            Manual::resolve($p, (string) $data['Estado']);
             $sum = $wpdb->get_var($wpdb->prepare("SELECT COALESCE(SUM(credit),0) FROM $table WHERE payment_id=%d", $p['id']));
             if ($sum === null || !empty($wpdb->last_error)) { throw new \RuntimeException('Falha ao conferir o crédito financeiro. A conciliação será repetida.'); }
             $sum = (int) $sum;

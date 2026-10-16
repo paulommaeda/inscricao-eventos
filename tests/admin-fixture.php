@@ -10,6 +10,7 @@ use InscricaoEventos\Payments as P;
 use InscricaoEventos\Admin as A;
 $stateFile = getenv('IE_ADMIN_STATE'); if (!$stateFile) { throw new RuntimeException('Fixture state missing.'); }
 $GLOBALS['test_admin_base'] = 'http://' . $_SERVER['HTTP_HOST'];
+$GLOBALS['test_manager'] = ($_COOKIE['ie_test_manager'] ?? '') === '1'; if ($GLOBALS['test_manager']) $GLOBALS['test_admin'] = false;
 $saved = file_exists($stateFile) ? json_decode(file_get_contents($stateFile), true) : null;
 if ($saved) {
     $wpdb->hydrate($saved['rows']); $GLOBALS['test_options'] = $saved['options']; $GLOBALS['test_transients'] = $saved['transients']; $GLOBALS['http_calls'] = $saved['calls'];
@@ -35,12 +36,13 @@ try {
             $GLOBALS['http_queue'][] = ['code' => 200, 'body' => json_encode($data)];
             if ($action === 'ie_cancel_payment') { $GLOBALS['http_queue'][] = ['code' => 200, 'body' => '{"Retorno":"OK","Posterior":false}']; $data['Estado'] = 'Estornado'; $GLOBALS['http_queue'][] = ['code' => 200, 'body' => json_encode($data)]; }
         }
-        $handlers = ['ie_save_registration' => 'saveRegistration', 'ie_registration_action' => 'registrationAction', 'ie_cancel_payment' => 'cancelPayment', 'ie_sync_payment' => 'syncPayment', 'ie_review_cancellation' => 'reviewCancellation', 'ie_delete_event' => 'deleteEvent'];
+        $handlers = ['ie_save_registration' => 'saveRegistration', 'ie_registration_action' => 'registrationAction', 'ie_cancel_payment' => 'cancelPayment', 'ie_sync_payment' => 'syncPayment', 'ie_review_cancellation' => 'reviewCancellation', 'ie_delete_event' => 'deleteEvent', 'ie_manual_payment' => 'manualPayment', 'ie_reverse_manual' => 'reverseManual', 'ie_export' => 'export'];
         if (!isset($handlers[$action])) throw new RuntimeException('Unsupported fixture action');
         A::{$handlers[$action]}(); return;
     }
-    header('Content-Type: text/html; charset=utf-8'); echo '<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/assets/admin.css"><style>body{margin:0;padding:18px;background:#f0f0f1;font:14px system-ui;color:#1d2327}*{box-sizing:border-box}.button{display:inline-block;padding:8px 12px;color:#215c4a;border:1px solid #a5b5a5;border-radius:4px;background:white;text-decoration:none;cursor:pointer}input,select,textarea{font:inherit;padding:8px;border:1px solid #aab4a7;border-radius:4px}.widefat{width:100%;border-collapse:collapse}.widefat th{text-align:left;padding:12px;background:#e7ece2}.notice{padding:12px;background:#fff;border-left:4px solid #215c4a}code{font-size:12px}</style>';
-    if (($_GET['page'] ?? '') === 'ie-events') { A::events(); }
+    ob_start(); header('Content-Type: text/html; charset=utf-8'); echo '<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/assets/admin.css"><style>body{margin:0;padding:18px;background:#f0f0f1;font:14px system-ui;color:#1d2327}*{box-sizing:border-box}.button{display:inline-block;padding:8px 12px;color:#215c4a;border:1px solid #a5b5a5;border-radius:4px;background:white;text-decoration:none;cursor:pointer}input,select,textarea{font:inherit;padding:8px;border:1px solid #aab4a7;border-radius:4px}.widefat{width:100%;border-collapse:collapse}.widefat th{text-align:left;padding:12px;background:#e7ece2}.notice{padding:12px;background:#fff;border-left:4px solid #215c4a}code{font-size:12px}</style>';
+    if (($_GET['page'] ?? '') === 'ie-settings') { A::settings(); }
+    elseif (($_GET['page'] ?? '') === 'ie-events') { A::events(); }
     else { if (!isset($_GET['view']) && !isset($_GET['edit_registration']) && isset($wpdb->rows['wp_ie_registrations'][1])) { $_GET['view'] = 1; } A::dashboard(); }
-    echo '<script src="/assets/admin.js"></script></html>';
-} catch (Throwable $e) { http_response_code(403); echo htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8'); }
+    echo '<script src="/assets/admin.js"></script></html>'; ob_end_flush();
+} catch (Throwable $e) { if (ob_get_level()) ob_end_clean(); http_response_code(403); echo htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8'); }

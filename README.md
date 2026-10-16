@@ -62,6 +62,35 @@ Um checkout já emitido mantém as condições que recebeu; o plugin não altera
 
 O dashboard separa **Recebimentos por meio** pelo método efetivo de cada tentativa, permitindo PIX e cartão para a mesma pessoa. Uma inscrição pode aparecer na contagem de recebimentos de ambos os meios; o total de inscrições continua único. Os filtros/colunas **Forma do cadastro** usam a modalidade da inscrição, enquanto a divisão de valores recebidos usa cada pagamento confirmado. Cancelamentos e estornos confirmados saem dos recebimentos correspondentes.
 
+## Baixa manual e perfis de acesso (1.4.0)
+
+O administrador abre **Inscrições → Acompanhamento → Detalhes / ações**. Há dois tipos de baixa:
+
+- **Registrar recebimento fora do K8:** para dinheiro, PIX externo, cartão externo, transferência ou outro recebimento. Informe valor (até o saldo), data, meio e motivo/identificação do comprovante; marque a confirmação. O crédito é independente do K8, sem criar nem cancelar cobranças externas. Não use esta modalidade para representar a mesma cobrança K8 com retorno atrasado.
+- **Baixa manual desta tentativa K8:** aparece em tentativas ainda sem resultado final, fora de cancelamento/estorno. Informe o valor total reconhecido nessa tentativa e o comprovante conferido. É um crédito provisório: cobre a parte não confirmada pelo K8 e aguarda a consulta da API. Não altera o estado K8 nem inventa transação remota. Links com baixa provisória deixam de aparecer para o participante.
+
+A consulta K8 continua conferindo CPF, referência, conta/ambiente, método e valor. Um retorno pendente ou inválido preserva a baixa provisória. Um **estado final verificado** substitui essa declaração pelo valor real da API na mesma transação de banco. Exemplo: baixa provisória de R$ 100,00 seguida de aprovação de R$ 100,00 mantém R$ 100,00 recebidos, com a fonte passando de manual para K8. Rejeição/cancelamento/estorno confirmado remove o crédito provisório; um PIX confirmado com valor menor corrige o saldo para esse valor. A baixa original e seu resultado permanecem no histórico. Repetições de formulário/callback não duplicam crédito.
+
+**Reverter esta baixa manual** exige administrador, confirmação e motivo. Remove apenas o crédito local dessa baixa e conserva valor, data, autor e histórico da reversão; não devolve dinheiro nem solicita estorno no K8. Uma baixa já substituída pela conciliação não reverte o crédito K8: use a ação própria de cancelamento/estorno quando necessário. Reversão de recebimentos externos depende da conferência da devolução fora do plugin.
+
+Os valores são limitados ao saldo e não admitem datas futuras. Inscrições canceladas/na lixeira precisam ser ativadas/restauradas para nova baixa. Leituras com erro impedem o lançamento. Todas as operações usam bloqueio por inscrição e transação de banco; erro na gravação do histórico também desfaz a baixa. Exclusão permanente remove os registros manuais vinculados.
+
+O participante vê apenas valor, meio, data e situação da baixa, sem observações internas ou identificação do administrador. Dashboard e CSV distinguem **Confirmado K8** e **Baixa manual ativa**; o saldo usa a mesma composição em todas as telas.
+
+### Gerente de Eventos
+
+O perfil é criado automaticamente na atualização/ativação. Em **Usuários → Editar usuário → Função**, selecione **Gerente de Eventos**. O perfil concede apenas `read` e `ie_view_events`; não muda a função padrão para novos usuários nem atribui acesso automaticamente aos participantes.
+
+| Ação no plugin | Administrador | Gerente de Eventos |
+| --- | --- | --- |
+| Consultar eventos, lotes, inscrições, detalhes e histórico | Sim | Sim |
+| Dashboard por shortcode, filtros e exportação CSV | Sim | Sim |
+| Criar/editar/excluir/restaurar eventos e inscrições | Sim | Não |
+| Baixa manual, reversão, conciliação, cancelamento e estorno | Sim | Não |
+| Credenciais, configurações e teste K8 | Sim | Não |
+
+Os gerentes podem usar o mesmo shortcode de dashboard já instalado e têm acompanhamento/consulta de eventos no WordPress. A interface oculta controles de alteração, e os controladores rejeitam escrita mesmo com URL direta e nonce válido. Somente administradores (`manage_options`) realizam baixas e demais operações de gestão. O perfil não concede edição de usuários, posts, arquivos ou plugins.
+
 ## Shortcodes e marca
 
 ```text
@@ -76,7 +105,7 @@ Datas incluem todo o dia no fuso configurado no evento, inicialmente `America/Sa
 
 ## Acompanhamento e conciliação
 
-O painel **Inscrições → Acompanhamento** mostra inscritos, valor total, confirmado, saldo e excedentes. Inclui filtros por evento, situação, método e nome/e-mail/CPF, paginação, detalhe da inscrição e exportação CSV.
+O painel **Inscrições → Acompanhamento** mostra inscritos, valor total, recebido, saldo e excedentes. O recebido combina créditos K8 e baixas manuais ativas, identificados separadamente. Inclui filtros por evento, situação, método e nome/e-mail/CPF, paginação, detalhe da inscrição e exportação CSV.
 
 Desde a versão 1.1.0, o painel oferece **Editar inscrição**, **Excluir inscrição**, **Restaurar** e ações K8 em cada tentativa. O filtro de inscrições ativas é inicial; escolha **Canceladas**, **Lixeira** ou **Todas as inscrições** para incluir os demais registros nos totais e na exportação.
 
@@ -101,17 +130,17 @@ Crie uma página para a organização e adicione:
 
 Troque `1` pelo ID do evento. Também aceita `[dashboard_evento id="1"]`. Sem ID, `[inscricao_eventos_dashboard]` permite escolher um evento ou acompanhar todos. A lista de eventos mostra o shortcode de cada um.
 
-O acesso exige uma conta WordPress com `manage_options` (administrador). Visitantes recebem apenas uma indicação de acesso restrito; a API também verifica permissão, usa o nonce REST autenticado e não permite cache dos dados financeiros. Páginas com esse shortcode sinalizam `DONOTCACHEPAGE`. Se o cache externo ignorar esse sinal, exclua a página do cache para manter login e nonce atualizados.
+O acesso exige uma conta WordPress administradora (`manage_options`) ou **Gerente de Eventos** (`ie_view_events`). Gerentes consultam, filtram, leem os detalhes e exportam CSV, sem ações de alteração. Visitantes e contas sem esses acessos recebem apenas uma indicação de acesso restrito; a API também verifica permissão, usa o nonce REST autenticado e não permite cache dos dados financeiros. Páginas com esse shortcode sinalizam `DONOTCACHEPAGE`. Se o cache externo ignorar esse sinal, exclua a página do cache para manter login e nonce atualizados.
 
 O painel mostra:
 
-- Inscrições, valor contratado, recebido/confirmado, a receber, percentual de quitação, quitadas, parciais e sem pagamento.
+- Inscrições, valor contratado, recebido/registrado (K8 e manual separados), a receber, percentual de quitação, quitadas, parciais e sem pagamento.
 - Dias até o evento, prazo para quitar, situação das inscrições e lote vigente, usando o fuso configurado. Data não configurada aparece como **A definir**; datas passadas são identificadas.
 - Financeiro por lote (nome congelado na inscrição), recebimentos por meio efetivamente pago, evolução dos cadastros e alertas de conferência, erro, cancelamento/estorno em andamento, excedentes e saldo após o prazo.
 - Filtros por evento, lote, pagamento, forma do cadastro, situação da inscrição, nome/e-mail/CPF completo e período de cadastro. O período inclui os dias completos no fuso do evento; na visão de todos os eventos usa UTC. O gráfico de cadastros usa UTC e os últimos 30 dias com registros.
-- Lista com contatos, valores, saldo, paginação de 25 registros e acesso aos detalhes/edição no WordPress. CSV aplica exatamente os mesmos filtros, incluindo lote, período e contas/ambientes.
+- Lista com contatos, valores, saldo, paginação de 25 registros e acesso aos detalhes/edição no WordPress, em modo de consulta para gerentes. CSV aplica exatamente os mesmos filtros, incluindo lote, período e contas/ambientes.
 
-Os totais e gráficos correspondem às inscrições filtradas, não apenas à página da tabela. O padrão usa inscrições ativas e a conta/ambiente K8 atual. Cartão aprovado é reconhecido integralmente como confirmado; não é uma demonstração de liquidação bancária ou de taxas do K8. Pagamentos excedentes permanecem destacados e não compensam a dívida de outras pessoas. As datas filtram o cadastro; o financeiro inclui todo o histórico conciliado dessas inscrições. **Atualizar** lê o saldo local conferido, sem emitir cobranças ou solicitar estornos; conciliação permanece nas ações de detalhe, cron e retornos.
+Os totais e gráficos correspondem às inscrições filtradas, não apenas à página da tabela. O padrão usa inscrições ativas e a conta/ambiente K8 atual. Cartão aprovado é reconhecido integralmente como confirmado; não é uma demonstração de liquidação bancária ou de taxas do K8. Pagamentos excedentes permanecem destacados e não compensam a dívida de outras pessoas. As datas filtram o cadastro; o financeiro inclui créditos K8 e baixas manuais ativas dessas inscrições, sem duplicar a baixa provisória conciliada. **Atualizar** lê o saldo local conferido, sem emitir cobranças ou solicitar estornos; conciliação permanece nas ações de detalhe, cron e retornos.
 
 ### Cancelamento e estorno no K8 Pay
 
@@ -172,6 +201,7 @@ php tests/webhook.php
 php tests/management.php
 php tests/dashboard.php
 php tests/installments.php
+php tests/manual.php
 npm install
 npx playwright install chromium
 npm test
@@ -179,6 +209,8 @@ python3 scripts/build.py
 ```
 
 Os testes financeiros usam dublês de WordPress/banco/K8 para verificar valores, CPF, limites de lotes, aprovação, estorno, duplicidade, rollback, proteção de origem e separação de ambientes. Os testes de webhook cobrem POST/GET, `ID_BknBank`, JSON/formulário, colisão de parâmetros, tokens, falhas temporárias, correlação e repetição sem duplicar crédito. Incluem GUIDs equivalentes, registros financeiros antigos, divergências por campo, busca exata de pedido após referência não localizada e rejeição de resultados não relacionados. Os testes de gestão verificam edição de CPF sem alterar cobranças antigas, lixeira, autorização, nonces, cancelamento/estorno, timeout e confirmação posterior. Os testes de dashboard executam os SELECTs reais em SQLite com compatibilidade explícita para GREATEST/LIKE, verificando agregações, filtros, fuso, paginação, autorização e remoção completa com rollback. O helper requer Python 3. Os testes de parcelamento cobrem todos os lotes, aniversário mensal, meses curtos/bissextos, fuso, mínimo de 1x, cobrança somente do saldo, dados adulterados, bloqueio de meios simultâneos, PIX + cartão, aprovação, repetição de callback e estorno. Os testes de navegador verificam participante, dashboard por shortcode e painel administrativo; o painel usa a renderização e os controladores PHP reais com banco e K8 simulados.
+
+Os testes de baixas manuais validam recebimentos parciais, duplicidade, reversão, resultado tardio K8, estorno, rollback, privacidade, fontes dos totais e permissões de gerente. Testes de navegador usam telas/controladores reais com dados simulados para baixa, reversão, consulta, exportação e bloqueio de alteração.
 
 Nenhum teste automatizado cria cobrança real. A versão inicial foi validada localmente com respostas simuladas; instalação no seu WordPress, autorização das credenciais, opções efetivas de parcelamento e callback real precisam de homologação na conta K8.
 

@@ -36,6 +36,32 @@ const assert = require('node:assert/strict');
     assert.equal(data.calls.filter(x => x[0].endsWith('/api/EstornaTransacaoPIx')).length, 1);
     const badNonce = await page.request.post(base + '/admin-post.php', { form: { action: 'ie_cancel_payment', registration_id: '1', payment_id: '1', remote_id: 'ui-transaction', operation: 'refund', reason: 'Repeated', confirmed: '1', _wpnonce: 'invalid' } });
     assert.equal(badNonce.status(), 403); assert.equal((await state()).calls.length, data.calls.length);
+    // Managers can inspect records and export, including when they know an otherwise valid admin nonce.
+    const managerContext = await browser.newContext({ viewport: { width: 390, height: 844 }, acceptDownloads: true });
+    await managerContext.addCookies([{ name: 'ie_test_manager', value: '1', url: base }]);
+    const manager = await managerContext.newPage(); await manager.goto(base + '/admin.php?view=1');
+    assert.match(await manager.locator('.ie-readonly').textContent(), /somente consulta/);
+    assert.equal(await manager.locator('form').count(), 0); assert.match(await manager.locator('h2').first().textContent(), /João Atualizado/);
+    assert.equal((await manager.request.get(base + '/admin.php?edit_registration=1')).status(), 403);
+    assert.equal((await manager.request.get(base + '/admin.php?page=ie-settings')).status(), 403);
+    const manualForm = page.locator('.ie-manual-panel').filter({ has: page.locator('input[name="payment_id"][value="0"]') }).locator('form');
+    const forged = await manager.request.post(base + '/admin-post.php', { form: { action: 'ie_manual_payment', registration_id: '1', payment_id: '0', amount: '50', method: 'Dinheiro', paid_on: '2026-10-14', note: 'Tentativa de gerente', confirmed: '1', request_token: 'a'.repeat(64), _wpnonce: await manualForm.locator('[name="_wpnonce"]').inputValue() } });
+    assert.equal(forged.status(), 403); assert.equal(Object.keys((await state()).rows.wp_ie_manuals || {}).length, 0);
+    await manager.goto(base + '/admin.php?page=ie-events'); assert.equal(await manager.getByRole('button', { name: /Salvar|Excluir|Duplicar/ }).count(), 0);
+    await manager.goto(base + '/admin.php?view=0');
+    const managerDownload = manager.waitForEvent('download'); await manager.getByRole('button', { name: 'Exportar inscrições filtradas (CSV)' }).click();
+    assert.match(fs.readFileSync(await (await managerDownload).path(), 'utf8'), /Confirmado K8.*Baixa manual ativa/);
+    if (process.env.IE_TEST_ARTIFACTS) { fs.mkdirSync(process.env.IE_TEST_ARTIFACTS, { recursive: true }); await manager.screenshot({ path: path.join(process.env.IE_TEST_ARTIFACTS, 'manager-mobile.png'), fullPage: true }); }
+    await managerContext.close();
+    // Real PHP receipt form and reversal; no K8 request or fake gateway status is produced.
+    await page.locator('.ie-manual-panel').filter({ has: page.locator('input[name="payment_id"][value="0"]') }).locator('summary').click();
+    await manualForm.locator('[name="amount"]').fill('50'); await manualForm.locator('[name="method"]').selectOption('Dinheiro'); await manualForm.locator('[name="note"]').fill('Recebimento em dinheiro conferido'); await manualForm.locator('[name="confirmed"]').check();
+    await manualForm.getByRole('button', { name: 'Registrar baixa manual' }).click(); await page.waitForLoadState('networkidle');
+    assert.match(await page.locator('.notice').textContent(), /Baixa manual #1/); data = await state(); assert.equal(data.rows.wp_ie_manuals[1].amount, 5000); assert.equal(data.rows.wp_ie_manuals[1].method, 'Dinheiro'); assert.equal(data.rows.wp_ie_transactions[1].credit, 0);
+    if (process.env.IE_TEST_ARTIFACTS) await page.screenshot({ path: path.join(process.env.IE_TEST_ARTIFACTS, 'manual-mobile.png'), fullPage: true });
+    await page.locator('.ie-manual-entry summary').click(); const reverseForm = page.locator('.ie-manual-entry form');
+    await reverseForm.locator('[name="note"]').fill('Correção de lançamento'); await reverseForm.locator('[name="confirmed"]').check(); await reverseForm.getByRole('button', { name: 'Reverter baixa manual' }).click(); await page.waitForLoadState('networkidle');
+    data = await state(); assert(data.rows.wp_ie_manuals[1].reversed_at); assert.equal(data.rows.wp_ie_transactions[1].credit, 0);
     if (process.env.IE_TEST_ARTIFACTS) { fs.mkdirSync(process.env.IE_TEST_ARTIFACTS, { recursive: true }); await page.screenshot({ path: path.join(process.env.IE_TEST_ARTIFACTS, 'admin-mobile.png'), fullPage: true }); }
     const callsBeforePurge = data.calls.length;
     await page.locator('.ie-danger summary').click();
@@ -47,11 +73,12 @@ const assert = require('node:assert/strict');
     assert.match(await wrong.text(), /Digite exatamente EXCLUIR 1/); assert((await state()).rows.wp_ie_registrations[1]);
     await purge.locator('[name="confirmation"]').fill('EXCLUIR 1'); await purge.getByRole('button', { name: 'Excluir definitivamente' }).click(); await page.waitForLoadState('networkidle');
     data = await state(); assert.equal(Object.keys(data.rows.wp_ie_registrations).length, 0); assert.equal(Object.keys(data.rows.wp_ie_payments).length, 0); assert.equal(Object.keys(data.rows.wp_ie_transactions).length, 0); assert.equal(Object.keys(data.rows.wp_ie_audit).length, 0); assert.equal(data.calls.length, callsBeforePurge);
+    assert.equal(Object.keys(data.rows.wp_ie_manuals).length, 0);
     await page.goto(base + '/admin.php?page=ie-events&edit=1');
     const removeEvent = page.locator('form').filter({ has: page.locator('input[name="action"][value="ie_delete_event"]') });
     await removeEvent.locator('[name="confirmation"]').fill('EXCLUIR EVENTO 1'); await removeEvent.getByRole('button', { name: 'Excluir evento permanentemente' }).click(); await page.waitForLoadState('networkidle');
     data = await state(); assert.equal(Object.keys(data.rows.wp_ie_events).length, 0); assert.equal(Object.keys(data.rows.wp_ie_lots).length, 0); assert.equal(data.calls.length, callsBeforePurge);
     assert.deepEqual(errors, []); assert(!/Warning:|Fatal error:|Deprecated:/.test(logs), logs);
-    console.log('OK: PHP admin edit, trash/restore, permanent registration/event deletion, typed confirmation, history, PIX refund, nonce and mobile layout.');
+    console.log('OK: PHP admin edits, manual receipt/reversal, manager read-only view/export, forged writes denied, deletion, PIX refund, nonce and mobile layout.');
   } finally { if (browser) await browser.close(); server.kill(); fs.rmSync(directory, { recursive: true, force: true }); }
 })().catch(error => { console.error(error); process.exit(1); });
