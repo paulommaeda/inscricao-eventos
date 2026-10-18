@@ -2,6 +2,9 @@
 namespace InscricaoEventos;
 if (!defined('ABSPATH')) { exit; }
 
+/** The API confirmed the transaction, but this response omitted its checkout/order link. */
+final class MissingBankLink extends \RuntimeException {}
+
 final class Payments
 {
     public static function register(array $input): array
@@ -110,7 +113,7 @@ final class Payments
             $existing = self::ledger($p, $remoteId);
             if ($existing && in_array($existing['cancel_status'] ?? '', ['sending', 'requested', 'review', 'confirmed'], true)) { throw new \RuntimeException('Já existe cancelamento ou estorno registrado para esta transação. Consulte o K8 antes de uma nova solicitação.'); }
             $data = $api->request('/api/ConsultaTransacao', ['Identificador' => $remoteId]);
-            self::applyVerified($p, $r, $data, $remoteId); // Full identity, CPF snapshot, method and amount are checked first.
+            self::queryVerified($api, $p, $r, $data, $remoteId); // Full identity, CPF snapshot, method and amount are checked first.
             $tx = self::ledger($p, $remoteId);
             if (!$tx) { throw new \RuntimeException('Transação não conferida para cancelamento.'); }
             $state = (string) $data['Estado'];
@@ -186,7 +189,7 @@ final class Payments
         return $existing;
     }
 
-    private static function diagnose(array $p, array $r, array $data, ?string $expectedId): void
+    private static function diagnose(array $p, array $r, array $data, ?string $expectedId, string $source = ''): void
     {
         $text = static fn($v) => is_scalar($v) ? Domain::cut(sanitize_text_field((string) $v), 100) : '[ausente/inválido]';
         $id = static function ($v) use ($text) { try { return Domain::remoteId($text($v)); } catch (\Throwable $e) { return '[ausente/inválido]'; } };
@@ -197,13 +200,14 @@ final class Payments
         $add = static function ($field, $local, $remote, $match) use (&$rows) { $rows[] = ['field' => $field, 'local' => $local, 'k8' => $remote, 'result' => $match]; };
         $add('ID da transação', $expectedId ? $id($expectedId) : 'Consulta por referência', $id($data['Identificador'] ?? ''), $expectedId ? ($id($expectedId) === $id($data['Identificador'] ?? '') ? 'Confere' : 'Divergente') : 'Localizado pelo K8');
         foreach (['Referencia' => 'Referência', 'NumeroPedido' => 'Número do pedido'] as $field => $label) { $v = $data[$field] ?? null; $add($label, $p['reference'], $text($v), $v === null || $v === '' ? 'Não informado' : ($v === $p['reference'] ? 'Confere' : 'Divergente')); }
-        $checkout = $data['IdentificadorCheckout'] ?? $data['CheckoutId'] ?? '';
+        $checkout = ($data['IdentificadorCheckout'] ?? '') ?: ($data['CheckoutId'] ?? '') ?: ($data['IndentificadorCheckout'] ?? '');
         $add('Checkout', $p['checkout_id'] ? $id($p['checkout_id']) : 'Não guardado', $checkout ? $id($checkout) : 'Não informado', $checkout ? (self::checkoutMatches($p, $checkout) ? 'Confere' : 'Divergente') : 'Não informado');
         $add('CPF da cobrança original', $mask($expectedCPF), $mask($receivedCPF), $expectedCPF === $receivedCPF ? 'Confere' : 'Divergente');
         $add('Forma', $p['method'], $text($data['Tipo'] ?? null), ($data['Tipo'] ?? '') === $p['method'] ? 'Confere' : 'Divergente');
         try { $amount = Domain::cents($data['Valor'] ?? ''); $add('Valor da transação', Domain::money((int) $p['amount']), Domain::money($amount), $amount === (int) $p['amount'] ? 'Confere' : 'Divergente'); }
         catch (\Throwable $e) { $add('Valor da transação', Domain::money((int) $p['amount']), '[ausente/inválido]', 'Divergente'); }
         $add('Estado', 'Confirmação pela API', $text($data['Estado'] ?? null), 'Informativo');
+        if ($source !== '') { $add('Vínculo confirmado pela API', 'Esta cobrança e o mesmo ID K8', $source, 'Confere'); }
         Store::update('payments', ['diagnostic_json' => wp_json_encode(['checked_at' => current_time('mysql', true), 'rows' => $rows])], ['id' => $p['id']]);
     }
 
@@ -251,21 +255,23 @@ final class Payments
             if ($ids) {
                 foreach ($ids as $candidate) {
                     $data = $api->request('/api/ConsultaTransacao', ['Identificador' => $candidate]);
-                    self::applyVerified($p, $r, $data, $candidate);
+                    self::queryVerified($api, $p, $r, $data, $candidate);
                 }
             } else {
                 try {
                     $data = $api->request('/api/ConsultaTransacaoReferencia', ['Referencia' => $p['reference']]);
-                    self::applyVerified($p, $r, $data);
+                    // The authenticated endpoint selected this exact, server-held reference.
+                    self::apply($p, $r, $data, null, 'Consulta K8 pela referência exata');
                 } catch (ReferenceNotFound $e) {
                     // Some checkouts do not expose their reference through the transaction lookup.
                     // Discover only exact order/reference/checkout matches, then re-query each ID.
                     $ids = self::discover($api, $p);
                     if (!$ids) { throw new \RuntimeException('O K8 ainda não devolveu uma transação vinculada a esta tentativa. Aguarde a confirmação ou informe o ID completo da transação no painel, sem gerar outra cobrança.'); }
-                    foreach ($ids as $candidate) {
+                    foreach ($ids as $candidate => $source) {
+                        $candidate = (string) $candidate;
                         Store::update('payments', ['remote_id_hint' => $candidate], ['id' => $paymentId]);
                         $data = $api->request('/api/ConsultaTransacao', ['Identificador' => $candidate]);
-                        self::applyVerified($p, $r, $data, $candidate);
+                        self::apply($p, $r, $data, $candidate, $source);
                     }
                 }
             }
@@ -282,8 +288,45 @@ final class Payments
         catch (\Throwable $e) { return false; }
     }
 
-    /** This API result only supplies candidate IDs. Credit always requires a separate ID query. */
-    private static function discover(Gateway $api, array $p): array
+    /** Check every supplied alias; an empty first alias must not hide a different checkout. */
+    private static function correlations(array $p, array $data): array
+    {
+        $matches = false; $problems = [];
+        foreach (['Referencia' => 'referência diferente', 'NumeroPedido' => 'número do pedido diferente'] as $field => $error) {
+            if (!isset($data[$field]) || $data[$field] === '') { continue; }
+            if (!is_string($data[$field]) && !is_int($data[$field])) { throw new \RuntimeException('Campo ' . $field . ' inválido na resposta K8.'); }
+            if ((string) $data[$field] === $p['reference']) { $matches = true; } else { $problems[] = $error; }
+        }
+        // The callback documentation also spells this field "IndentificadorCheckout".
+        foreach (['IdentificadorCheckout', 'CheckoutId', 'IndentificadorCheckout'] as $field) {
+            if (!isset($data[$field]) || $data[$field] === '') { continue; }
+            if (!is_string($data[$field])) { throw new \RuntimeException('Campo ' . $field . ' inválido na resposta K8.'); }
+            if (self::checkoutMatches($p, $data[$field])) { $matches = true; }
+            elseif (!empty($p['checkout_id'])) { $problems[] = 'checkout diferente'; }
+        }
+        return [$matches, array_values(array_unique($problems))];
+    }
+
+    /** No callback/browser field supplies this proof: both lookups use authenticated K8 APIs. */
+    private static function queryVerified(Gateway $api, array $p, array $r, array $data, string $expectedId): void
+    {
+        try { self::applyVerified($p, $r, $data, $expectedId); return; }
+        catch (MissingBankLink $e) { /* Identity, CPF, method and amount passed; recover only the missing link. */ }
+        try {
+            $byReference = $api->request('/api/ConsultaTransacaoReferencia', ['Referencia' => $p['reference']]);
+            self::identity($p, $r, $byReference, $expectedId, true);
+            $source = 'Consulta K8 pela referência exata';
+        } catch (ReferenceNotFound $e) {
+            $matches = self::discover($api, $p, $expectedId);
+            $source = $matches[Domain::remoteId($expectedId)] ?? '';
+            if (!$source) { throw new MissingBankLink('O K8 devolveu a transação, mas não confirmou seu vínculo com o pedido ou checkout nas consultas por referência e listagem. A cobrança permanece em conferência; confira o comprovante e use a baixa manual da própria transação K8, sem gerar outra cobrança.'); }
+        }
+        // Status and money come from the individual lookup, never from a listing or callback.
+        self::apply($p, $r, $data, $expectedId, $source);
+    }
+
+    /** Returns API-proven ID/link pairs. Credit still requires a separate individual ID query. */
+    private static function discover(Gateway $api, array $p, ?string $expectedId = null): array
     {
         $created = \DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', (string) ($p['created_at'] ?? ''), new \DateTimeZone('UTC'));
         if (!$created) { throw new \RuntimeException('Data da tentativa inválida para consultar o K8. Informe o ID completo da transação.'); }
@@ -295,11 +338,16 @@ final class Payments
             if (!isset($data['Transacoes']) || !is_array($data['Transacoes'])) { throw new \RuntimeException('Lista de transações K8 inválida. Informe o ID completo da transação para consultar.'); }
             foreach ($data['Transacoes'] as $row) {
                 if (!is_array($row)) { throw new \RuntimeException('Lista de transações K8 inválida.'); }
-                if (($row['Referencia'] ?? '') !== $p['reference'] && ($row['NumeroPedido'] ?? '') !== $p['reference'] && !self::checkoutMatches($p, $row['IdentificadorCheckout'] ?? $row['CheckoutId'] ?? '')) { continue; }
+                [$matched] = self::correlations($p, $row);
+                if (!$matched) { continue; }
                 if (!is_string($row['Identificador'] ?? null) && !is_int($row['Identificador'] ?? null)) { throw new \RuntimeException('Identificador inválido na lista de transações K8.'); }
-                $ids[] = Domain::remoteId((string) $row['Identificador']);
+                $id = Domain::remoteId((string) $row['Identificador']);
+                if ($expectedId !== null && $id !== Domain::remoteId($expectedId)) { continue; }
+                // A matching field cannot override a contradictory field or another participant.
+                self::identity($p, $r, $row, $id, false);
+                $ids[$id] = 'Listagem K8 (' . $filter . '): vínculo exato com pedido/referência/checkout';
             }
-            $ids = array_values(array_unique($ids)); $search[] = ['filter' => $filter, 'returned' => count($data['Transacoes']), 'matched' => count($ids)];
+            $search[] = ['filter' => $filter, 'returned' => count($data['Transacoes']), 'matched' => count($ids)];
             $rows[] = ['field' => 'Busca: ' . $filter, 'local' => 'Pedido/referência ' . $p['reference'] . ' ou checkout ' . ($p['checkout_id'] ?? ''), 'k8' => count($data['Transacoes']) . ' transações; ' . count($ids) . ' correspondências exatas', 'result' => $ids ? 'Encontrada' : 'Não localizada'];
             Store::update('payments', ['diagnostic_json' => wp_json_encode(['checked_at' => current_time('mysql', true), 'rows' => $rows, 'search' => $search])], ['id' => $p['id']]);
             if ($ids) { break; }
@@ -307,30 +355,42 @@ final class Payments
         return $ids;
     }
 
-    /** Caller holds the registration lock. Callback payloads never call this directly. */
-    public static function applyVerified(array $p, array $r, array $data, ?string $expectedId = null): void
+    /** Pure validation shared by detail and link lookups; it never writes financial credit. */
+    private static function identity(array $p, array $r, array $data, ?string $expectedId, bool $bankLinked): array
     {
-        global $wpdb;
-        self::diagnose($p, $r, $data, $expectedId);
-        foreach (['Identificador', 'Referencia', 'NumeroPedido', 'IdentificadorCheckout', 'CheckoutId', 'ClienteCPFCNPJ'] as $field) {
+        foreach (['Identificador', 'ClienteCPFCNPJ'] as $field) {
             if (isset($data[$field]) && !is_string($data[$field]) && !is_int($data[$field])) { throw new \RuntimeException('Campo ' . $field . ' inválido na resposta K8.'); }
         }
         $id = Domain::remoteId((string) ($data['Identificador'] ?? ''));
         if ($expectedId !== null) { $expectedId = Domain::remoteId($expectedId); }
-        $reference = (string) ($data['Referencia'] ?? ''); $order = (string) ($data['NumeroPedido'] ?? '');
-        $checkout = (string) ($data['IdentificadorCheckout'] ?? $data['CheckoutId'] ?? '');
-        $matches = $reference === $p['reference'] || $order === $p['reference'] || self::checkoutMatches($p, $checkout);
-        $problems = [];
+        [$matches, $problems] = self::correlations($p, $data);
         if ($expectedId && $id !== $expectedId) { $problems[] = 'ID retornado diferente do ID consultado'; }
-        if (!$matches) { $problems[] = 'nenhum pedido, referência ou checkout corresponde à tentativa'; }
-        if ($reference !== '' && $reference !== $p['reference']) { $problems[] = 'referência diferente'; }
-        if ($order !== '' && $order !== $p['reference']) { $problems[] = 'número do pedido diferente'; }
-        if ($checkout !== '' && !empty($p['checkout_id']) && !self::checkoutMatches($p, $checkout)) { $problems[] = 'checkout diferente'; }
+        if (!hash_equals($p['scope'], $r['scope'])) { $problems[] = 'conta ou ambiente diferente'; }
         if (preg_replace('/\D/', '', (string) ($data['ClienteCPFCNPJ'] ?? '')) !== Security::unseal(($p['cpf_snapshot'] ?? '') ?: $r['cpf_encrypted'])) { $problems[] = 'CPF diferente ou ausente'; }
         if ($problems) { throw new \RuntimeException('A transação K8 não corresponde à inscrição: ' . implode('; ', $problems) . '.'); }
-        $table = Store::table('transactions');
         $existing = self::ledger($p, $id);
         $credit = Domain::credit($data, (int) $p['amount'], $p['method'], (int) ($existing['credit'] ?? 0));
+        if (!$matches && !$bankLinked && !$existing) { throw new MissingBankLink('A transação K8 não corresponde à inscrição: nenhum pedido, referência ou checkout corresponde à tentativa.'); }
+        return [$id, $existing, $credit];
+    }
+
+    /** Caller holds the registration lock. Callback payloads never call this directly. */
+    public static function applyVerified(array $p, array $r, array $data, ?string $expectedId = null): void
+    {
+        self::apply($p, $r, $data, $expectedId);
+    }
+
+    /** Bank link provenance can only be supplied by the private authenticated lookup flow. */
+    private static function apply(array $p, array $r, array $data, ?string $expectedId, string $source = ''): void
+    {
+        global $wpdb;
+        self::diagnose($p, $r, $data, $expectedId, $source);
+        [$id, $existing, $credit] = self::identity($p, $r, $data, $expectedId, $source !== '');
+        if (!$source && $existing) {
+            [$matched] = self::correlations($p, $data);
+            if (!$matched) { self::diagnose($p, $r, $data, $expectedId, 'Histórico: mesmo ID já conferido pela API para esta cobrança'); }
+        }
+        $table = Store::table('transactions');
         $row = ['payment_id' => $p['id'], 'scope' => $p['scope'], 'remote_id' => $id, 'remote_state' => $data['Estado'], 'credit' => $credit, 'paid_at' => Domain::cut((string) ($data['DataPagamento'] ?? ''), 40), 'synced_at' => current_time('mysql', true)];
         if (in_array($data['Estado'], ['Cancelada', 'Estornado', 'Rejeitada'], true) && in_array($existing['cancel_status'] ?? '', ['sending', 'requested', 'review'], true)) { $row['cancel_status'] = 'confirmed'; $row['cancel_error'] = ''; }
         elseif (self::cancellationState($data['Estado'])) { $row['cancel_status'] = in_array($data['Estado'], ['ErroEstorno', 'FalhaCancelamento'], true) ? 'review' : 'requested'; }

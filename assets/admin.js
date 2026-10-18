@@ -1,12 +1,21 @@
 (() => {
   'use strict';
+  const origensColors = { primary_color: '#075ea8', accent_color: '#62c5f4', background_color: '#f0f5fc' };
+  const applyColors = form => Object.entries(origensColors).forEach(([name, value]) => { form.querySelector(`[name="${name}"]`).value = value; });
   document.addEventListener('change', event => {
     if (event.target.matches('[name="brand_preset"]') && event.target.value === 'origens') {
-      Object.entries({ primary_color: '#075ea8', accent_color: '#62c5f4', background_color: '#f0f5fc' }).forEach(([name, value]) => { document.querySelector(`[name="${name}"]`).value = value; });
+      applyColors(event.target.form);
     }
   });
   document.addEventListener('click', event => {
     const button = event.target.closest('button'); if (!button) return;
+    if (button.matches('.ie-apply-origens')) {
+      const form = button.form;
+      form.querySelector('[name="brand_preset"]').value = 'origens';
+      form.querySelector('[name="hero_url"]').value = '';
+      applyColors(form);
+      form.querySelector('.ie-brand-feedback').textContent = 'Capa Origens sem QR Code e paleta azul selecionadas. Clique em Salvar evento para aplicar.';
+    }
     if (button.matches('#ie-add-lot')) {
       const list = document.getElementById('ie-lots');
       const template = document.getElementById('ie-lot-template');

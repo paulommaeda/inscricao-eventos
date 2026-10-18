@@ -11,7 +11,19 @@ const assert = require('node:assert/strict');
   try {
     for (let i = 0; i < 50; i++) { try { await fetch(base); break; } catch { await new Promise(resolve => setTimeout(resolve, 100)); } }
     browser = await chromium.launch({ headless: true, ...(process.env.IE_TEST_CHROMIUM ? { executablePath: process.env.IE_TEST_CHROMIUM, args: ['--no-sandbox', '--disable-dev-shm-usage'] } : {}) });
-    const visitor = await browser.newPage(); await visitor.goto(base);
+    const visitor = await browser.newPage();
+    // Upgrade the actual stored copy with a missing original sample, then render
+    // the real public API + registration shortcode, without a preset mocked in JS.
+    await visitor.setViewportSize({ width: 390, height: 844 }); await visitor.goto(base + '/inscricoes');
+    await visitor.locator('.ie-origens .ie-brand-cover img').waitFor();
+    assert.equal(await visitor.locator('.ie-brand-cover img').getAttribute('src'), '/assets/origens-cover.jpg');
+    await visitor.locator('.ie-brand-cover img').evaluate(img => img.decode());
+    assert.match(await visitor.locator('.ie-live-lot').textContent(), /Lote 1.*490,00/);
+    assert.equal(await visitor.locator('.ie-app').evaluate(el => el.style.getPropertyValue('--ie-primary')), '#075ea8');
+    assert(await visitor.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    if (process.env.IE_TEST_ARTIFACTS) { fs.mkdirSync(process.env.IE_TEST_ARTIFACTS, { recursive: true }); await visitor.screenshot({ path: path.join(process.env.IE_TEST_ARTIFACTS, 'upgraded-registration-mobile.png'), fullPage: true }); }
+    await visitor.setViewportSize({ width: 1366, height: 1000 }); await visitor.goto(base);
+    assert.equal(await visitor.locator('.ied-login-cover').getAttribute('src'), '/assets/origens-cover.jpg');
     assert.match(await visitor.textContent('body'), /restrito a administradores/); assert.equal(await visitor.locator('.ied-metric').count(), 0);
     assert.equal((await visitor.request.get(base + '/api/dashboard?event=1')).status(), 403);
     assert.equal(await visitor.locator('.ied-login-form').count(), 1);
@@ -30,6 +42,7 @@ const assert = require('node:assert/strict');
     const apply = async () => { await page.getByRole('button', { name: 'Aplicar filtros', exact: true }).click(); await ready(); };
     const count = async () => Number(await page.locator('.ied-metric').first().locator('strong').textContent());
     await page.goto(base); await ready(); assert.equal(await count(), 30); assert.match(await page.locator('.ied-header').textContent(), /120 dias/);
+    assert.equal(await page.locator('.ie-origens>.ie-brand-cover img').getAttribute('src'), '/assets/origens-cover.jpg');
     assert.match(await page.locator('.ied-metric-received strong').textContent(), /8\.150,00/); assert.match(await page.locator('.ied-metric-due strong').textContent(), /6\.550,00/);
     assert.equal(await page.locator('.ied-registration-panel tbody tr').count(), 25);
     assert.equal(await page.locator('.ied-filters [name="event"]').isDisabled(), true);

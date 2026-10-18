@@ -21,12 +21,25 @@ $e = array_merge(S::sample(), ['status' => 'published', 'name' => 'Retiro de tes
 $eid = S::insert('events', $e); $other = S::insert('events', array_merge($e, ['brand_preset' => 'custom', 'name' => 'Outro evento']));
 S::insert('lots', ['event_id' => $eid, 'name' => 'Lote vigente', 'price' => 52000, 'max_installments' => 8, 'starts_on' => $e['registration_start'], 'ends_on' => $e['registration_end'], 'note' => '']);
 $rid = registration($eid, $scope); $foreign = registration($other, $scope); $otherBank = registration($eid, 'other-bank', '11144477735');
+$legacyPalette = ['primary_color' => '#215c4a', 'accent_color' => '#d2a45c', 'background_color' => '#f6f5f0'];
+$publishedCopy = S::insert('events', array_merge($e, $legacyPalette, ['name' => 'Fogo Santo - Origens', 'brand_preset' => 'custom', 'hero_url' => 'https://event.test/uploads/origens.jpeg']));
+$customCopy = S::insert('events', array_merge($e, $legacyPalette, ['name' => 'Fogo Santo - Origens', 'brand_preset' => 'custom', 'primary_color' => '#123456', 'hero_url' => 'https://event.test/custom.jpg']));
+$otherLegacy = S::insert('events', array_merge($e, $legacyPalette, ['name' => 'Outro retiro', 'brand_preset' => 'custom', 'hero_url' => 'https://event.test/other.jpg']));
+$customBefore = S::event($customCopy); $otherBefore = S::event($otherLegacy); $copyBefore = S::event($publishedCopy);
 update_option('ie_sample_created', $eid); $before = S::registration($rid); B::migrate(); $branded = S::event($eid);
+same([S::event($publishedCopy)['brand_preset'], S::event($publishedCopy)['primary_color'], S::event($publishedCopy)['hero_url']], ['origens', '#075ea8', ''], 'Published copy with legacy palette receives bundled identity');
+same(S::event($publishedCopy), array_merge($copyBefore, B::ORIGENS, ['brand_preset' => 'origens', 'hero_url' => '']), 'Repair changes only visual fields of the published copy');
+same(S::event($customCopy), $customBefore, 'Already customized retreat palette is preserved'); same(S::event($otherLegacy), $otherBefore, 'Another event with old palette is preserved');
 same($branded['brand_preset'], 'origens', 'Initial retreat receives Origens preset'); same($branded['primary_color'], '#075ea8', 'Identity blue applied'); same(S::registration($rid), $before, 'Brand migration cannot change registration contract'); same(S::event($other)['brand_preset'], 'custom', 'Other event identity preserved');
 same([$branded['event_date'], $branded['registration_start'], $branded['registration_end']], [$e['event_date'], $e['registration_start'], $e['registration_end']], 'Poster dates never replace event dates');
 same(str_ends_with(B::present($branded)['cover_url'], '/assets/origens-cover.jpg'), true, 'Bundled clean banner used');
 same(B::present(['allow_card' => '0', 'allow_pix' => '1'])['allow_card'], false, 'Database string zero cannot advertise online card'); same(B::present(['allow_card_physical' => '1'])['allow_card_physical'], true, 'Database string flag normalized for banner');
 S::update('events', ['primary_color' => '#123456'], ['id' => $eid]); B::migrate(); same(S::event($eid)['primary_color'], '#123456', 'Identity migration runs once and preserves later customization');
+S::update('events', ['brand_preset' => 'custom', 'primary_color' => '#123456', 'hero_url' => 'https://event.test/later.jpg'], ['id' => $publishedCopy]); B::migrate(); same(S::event($publishedCopy)['hero_url'], 'https://event.test/later.jpg', 'Repair also preserves customization after upgrading');
+// Repair still runs when the previous release already marked its original-model migration done.
+delete_option('ie_origens_branding_repaired_161'); update_option('ie_sample_created', 9999);
+$copySeed = $copyBefore; unset($copySeed['id']); $lateCopy = S::insert('events', $copySeed); B::migrate();
+same(S::event($lateCopy)['brand_preset'], 'origens', 'Missing/deleted model cannot prevent repair of published copy'); update_option('ie_sample_created', $eid);
 $catalog = (new ReflectionMethod(Api::class, 'catalog'))->invoke(null, new WP_REST_Request([], ['event' => $eid])); same($catalog[0]['brand_preset'], 'origens', 'Public API includes visual identity'); same($catalog[0]['active_lot'], 1, 'Public lot selected from current dates'); same($catalog[0]['lots'][0]['price'], 52000, 'Current lot distinct from frozen price');
 $read = Panel::read(request($rid, [], ['event' => $eid])); same($read->get_status(), 200, 'Administrator reads modal'); $detail = $read->get_data();
 same([$detail['registration']['total'], $detail['registration']['registration_status']], [49000, 'active'], 'Frozen contract and lifecycle are separate from financial status');

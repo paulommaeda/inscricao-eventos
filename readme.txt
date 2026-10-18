@@ -2,7 +2,7 @@
 Contributors: paulommaeda
 Requires at least: 6.4
 Requires PHP: 8.1
-Stable tag: 1.6.0
+Stable tag: 1.6.1
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -14,6 +14,15 @@ Use [inscricao_eventos evento="1"] em uma página. A ativação cria o modelo do
 Use [inscricao_eventos_dashboard evento="1"] para o dashboard privado da organização.
 
 == Changelog ==
+= 1.6.1 =
+* Conciliação de PIX cuja consulta individual omite referência, pedido e checkout: recupera o vínculo nas consultas autenticadas por referência/listagem e exige o mesmo ID, CPF, meio e valor.
+* Preserva o vínculo confirmado entre listagem e consulta individual, sem usar o estado da listagem ou do callback como aprovação.
+* Retornos repetidos e estornos reutilizam o ID já conferido; baixas manuais provisórias continuam sendo substituídas sem duplicar crédito.
+* Diagnóstico indica a origem do vínculo confirmado e orienta a conferência quando o K8 não informa vínculo em nenhuma consulta.
+* Corrige a identidade da cópia publicada Fogo Santo - Origens com paleta antiga, incluindo a substituição da capa antiga pela arte sem QR Code. Datas, lotes e pagamentos são preservados.
+* Botão Aplicar capa e cores Origens no editor do evento, removendo a URL que substituía a capa incluída.
+* Testes do retorno com campos ausentes, divergências de identidade/ID, repetição, estorno, baixa provisória e visual após atualização do evento existente.
+
 = 1.6.0 =
 * Login no próprio dashboard, com retorno direto após entrar, mensagem de erro na página e validação de acesso de administradores/gerentes.
 * Detalhes de inscrição em modal, com cadastro, financeiro, pagamentos K8, baixas e histórico sem sair da página.

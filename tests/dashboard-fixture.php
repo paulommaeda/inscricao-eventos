@@ -1,7 +1,7 @@
 <?php
 /** Read-only dashboard fixture: synthetic records and the real PHP report/controller code. */
 $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
-if (in_array($path, ['/assets/dashboard.css', '/assets/dashboard.js', '/assets/brand.css', '/assets/brand.js', '/assets/registration-modal.js', '/assets/origens-cover.jpg'], true)) { header('Content-Type: ' . (str_ends_with($path, '.jpg') ? 'image/jpeg' : (str_ends_with($path, '.css') ? 'text/css' : 'application/javascript'))); readfile(dirname(__DIR__) . $path); return; }
+if (in_array($path, ['/assets/public.css', '/assets/public.js', '/assets/dashboard.css', '/assets/dashboard.js', '/assets/brand.css', '/assets/brand.js', '/assets/registration-modal.js', '/assets/origens-cover.jpg'], true)) { header('Content-Type: ' . (str_ends_with($path, '.jpg') ? 'image/jpeg' : (str_ends_with($path, '.css') ? 'text/css' : 'application/javascript'))); readfile(dirname(__DIR__) . $path); return; }
 require __DIR__ . '/admin-bootstrap.php';
 use InscricaoEventos\Store as S;
 use InscricaoEventos\Security as C;
@@ -14,7 +14,7 @@ $stateFile = getenv('IE_DASH_STATE'); $saved = $stateFile && is_file($stateFile)
 $GLOBALS['test_admin'] = ($_COOKIE['ie_test_admin'] ?? '') === '1'; $GLOBALS['test_manager'] = ($_COOKIE['ie_test_manager'] ?? '') === '1'; $GLOBALS['test_logged_in'] = $GLOBALS['test_admin'] || $GLOBALS['test_manager'];
 update_option('ie_settings', ['environment' => 'sandbox', 'credentials' => C::seal(json_encode(['id' => 'dashboard-fixture', 'secret' => 'fictional', 'aes' => '1234567890abcdef']))]);
 $scope = (new G())->scope(); $today = new DateTimeImmutable('now', new DateTimeZone('America/Sao_Paulo'));
-$event = array_merge(S::sample(), ['name' => 'Encontro da Comunidade', 'location' => 'Recanto das Oliveiras', 'status' => 'published', 'event_date' => $today->modify('+120 days')->format('Y-m-d'), 'payment_deadline' => $today->modify('+115 days')->format('Y-m-d'), 'registration_start' => $today->modify('-15 days')->format('Y-m-d'), 'registration_end' => $today->modify('+30 days')->format('Y-m-d')]);
+$event = array_merge(S::sample(), ['name' => 'Fogo Santo - Origens', 'brand_preset' => 'custom', 'primary_color' => '#215c4a', 'accent_color' => '#d2a45c', 'background_color' => '#f6f5f0', 'hero_url' => 'https://event.test/uploads/origens.jpeg', 'location' => 'Recanto das Oliveiras', 'status' => 'published', 'event_date' => $today->modify('+120 days')->format('Y-m-d'), 'payment_deadline' => $today->modify('+115 days')->format('Y-m-d'), 'registration_start' => $today->modify('-15 days')->format('Y-m-d'), 'registration_end' => $today->modify('+30 days')->format('Y-m-d')]);
 $eid = S::insert('events', $event);
 S::insert('lots', ['event_id' => $eid, 'name' => 'Lote 1', 'price' => 49000, 'max_installments' => 10, 'starts_on' => $event['registration_start'], 'ends_on' => $today->modify('+10 days')->format('Y-m-d')]);
 S::insert('lots', ['event_id' => $eid, 'name' => 'Lote 2', 'price' => 52000, 'max_installments' => 8, 'starts_on' => $today->modify('+11 days')->format('Y-m-d'), 'ends_on' => $event['registration_end']]);
@@ -30,11 +30,21 @@ for ($i = 0; $i < 34; $i++) {
     }
 }
 if ($saved) { $wpdb->hydrate($saved['rows']); $GLOBALS['test_options'] = $saved['options']; $GLOBALS['test_transients'] = $saved['transients']; }
+if (!$saved) { update_option('ie_sample_created', 9999); update_option('ie_origens_branding_applied', 1); }
+InscricaoEventos\Branding::migrate();
 if ($stateFile) register_shutdown_function(static function () use ($stateFile, $wpdb) { file_put_contents($stateFile, json_encode(['rows' => $wpdb->rows, 'options' => $GLOBALS['test_options'], 'transients' => $GLOBALS['test_transients']])); });
 if (($_COOKIE['ie_manual_fixture'] ?? '') === '1' && !array_filter($wpdb->rows['wp_ie_manuals'] ?? [], static fn($m) => $m['note'] === 'Comprovante privado da organização')) {
     S::insert('manuals', ['registration_id' => 3, 'payment_id' => 0, 'amount' => 10000, 'method' => 'Dinheiro', 'paid_on' => $today->format('Y-m-d'), 'note' => 'Comprovante privado da organização', 'request_key' => str_repeat('f', 64), 'actor_id' => 1, 'created_at' => current_time('mysql', true), 'reversed_at' => null, 'reversed_by' => 0, 'reverse_note' => '', 'resolved_at' => null, 'resolved_state' => '']);
 }
 try {
+    if (in_array($path, ['/api/events', '/api/bootstrap', '/api/account'], true)) {
+        $response = InscricaoEventos\Api::respond(static function () use ($path) {
+            if ($path === '/api/events') { return (new ReflectionMethod(InscricaoEventos\Api::class, 'catalog'))->invoke(null, new WP_REST_Request([], $_GET)); }
+            if ($path === '/api/bootstrap') { return C::bootstrap(); }
+            throw new RuntimeException('Consulte seu CPF.');
+        });
+        http_response_code($response->get_status()); header('Content-Type: application/json'); echo json_encode($response->get_data()); return;
+    }
     if ($path === '/api/dashboard' || preg_match('~^/api/registration/(\d+)$~', $path, $match)) {
         // Mimic WordPress cookie + wp_rest nonce authentication before calling the real route.
         if (($_SERVER['HTTP_X_WP_NONCE'] ?? '') !== wp_create_nonce('wp_rest')) { $GLOBALS['test_admin'] = false; $GLOBALS['test_manager'] = false; }
@@ -46,6 +56,11 @@ try {
     if ($path === '/admin-post.php') { if (($_POST['action'] ?? '') === 'ie_dashboard_login') { InscricaoEventos\DashboardLogin::handle(); return; } if (($_POST['action'] ?? '') !== 'ie_export') throw new RuntimeException('Unsupported action'); A::export(); return; }
     if (isset($_GET['ie_logout'])) { wp_logout(); wp_safe_redirect($GLOBALS['test_admin_base'] . '/'); return; }
     header('Content-Type: text/html; charset=utf-8');
+    if ($path === '/inscricoes') {
+        require_once dirname(__DIR__) . '/includes/Plugin.php';
+        $shortcode = InscricaoEventos\Plugin::shortcode(['evento' => $eid]);
+        echo '<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;padding:8px}</style><link rel="stylesheet" href="/assets/brand.css"><link rel="stylesheet" href="/assets/public.css">' . $shortcode . '<script>' . $GLOBALS['test_inline']['ie-public'] . 'window.IE_CONFIG.api="/api/";</script><script src="/assets/brand.js"></script><script src="/assets/public.js"></script></html>'; return;
+    }
     $shortcode = D::shortcode($path === '/all' ? [] : ['evento' => $eid]);
     echo '<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashboard do evento</title><style>body{margin:0;padding:22px;background:#fff;color:#213d36;font:14px system-ui}@media(max-width:520px){body{padding:8px}}</style>';
     echo '<link rel="stylesheet" href="/assets/brand.css"><link rel="stylesheet" href="/assets/dashboard.css">' . $shortcode;

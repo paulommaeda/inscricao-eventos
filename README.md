@@ -13,6 +13,16 @@ Plugin reutilizável para inscrições com lotes, identidade visual própria, ca
 
 Requisitos: WordPress 6.4+, PHP 8.1+, OpenSSL e MySQL/MariaDB com InnoDB. Não depende de WooCommerce nem dos plugins K8 anteriores.
 
+## Retorno PIX com campos de vínculo ausentes (1.6.1)
+
+Algumas respostas individuais do K8 trazem o PIX aprovado, CPF, meio e valor, mas omitem referência, número do pedido e checkout. O plugin passa a recuperar o vínculo em outra consulta autenticada: pesquisa a referência exata guardada no servidor e exige o mesmo ID; se o K8 não localizar a referência, pesquisa os filtros documentados `dataemissao` e `checkout` e exige uma correspondência exata do mesmo ID com o pedido/referência/checkout. O vínculo encontrado na listagem é preservado na conferência individual. O estado e o valor efetivamente creditado continuam vindo da consulta individual, não da listagem nem do callback.
+
+Uma consulta bem-sucedida pela referência exata também pode omitir o eco da referência; a seleção feita pelo endpoint autentica esse vínculo. Nos retornos seguintes, o mesmo ID já conferido no histórico permite consultar pagamentos e estornos sem exigir que o K8 passe a devolver os campos omitidos. Nenhuma dessas alternativas dispensa CPF original, conta/ambiente, meio, valor ou a conferência de todos os campos de vínculo presentes. Um campo divergente continua bloqueando a conciliação. IDs fornecidos pelo navegador, webhook ou baixa manual permanecem pistas até essa conferência.
+
+Depois de atualizar, abra a cobrança existente e clique em **Sincronizar**, usando o ID já guardado. Isso consulta o mesmo pagamento e não emite cobrança. O diagnóstico **Vínculo confirmado pela API** mostra a origem da correspondência. Se o banco não confirmar vínculo em nenhuma consulta, o pagamento permanece em conferência e o diagnóstico orienta a usar **Dar baixa manual da transação K8** com o comprovante. Uma baixa provisória já registrada é substituída pela confirmação bancária sem duplicar o recebimento.
+
+Referências técnicas: [consulta por referência](https://docs.meuk8.com.br/reference/consultatransacao_consultatransacaoreferencia_consultatransacaoreferencia_post), [listagem de transações](https://docs.meuk8.com.br/reference/consultatransacoes_consultatransacoes_consultatransacoes_post) e [callback e campos de checkout](https://docs.meuk8.com.br/docs/payload-callback). Testes usam respostas simuladas, sem credenciais ou pagamentos reais.
+
 ## Dashboard, login e detalhes em modal (1.6.0)
 
 Na página da organização, mantenha `[inscricao_eventos_dashboard evento="1"]` ou `[dashboard_evento id="1"]`. Um visitante vê o formulário **Entrar no dashboard** nessa página. A autenticação usa a conta WordPress; após entrar, o participante da organização retorna diretamente ao dashboard. Erros de credenciais também retornam ao formulário, sem expor informações sobre contas. O formulário exige nonce vinculado ao navegador, limita tentativas e valida o endereço local de retorno. A página e a API privada enviam orientação para não armazenar dados em cache.
@@ -23,7 +33,9 @@ Os botões **Consultar detalhes** e **Detalhes / editar** abrem um modal na pró
 
 ## Identidade Origens e capa dinâmica
 
-A atualização aplica a identidade azul e preta ao evento criado pelo modelo original do retiro. Outros eventos conservam sua identidade. Em **Eventos e lotes → Editar → Identidade visual**, escolha **Origens — azul e preto** ou **Personalizada**. Cores, logotipo e imagem de capa continuam editáveis; sem uma capa personalizada, Origens usa a arte incluída no plugin.
+A atualização aplica a identidade azul e preta ao evento criado pelo modelo original do retiro. A versão 1.6.1 corrige também a cópia publicada **Fogo Santo - Origens** que ainda conserva a paleta verde padrão e o tema Personalizada: seleciona Origens e troca a capa antiga `origens.jpeg/jpg/png` pela arte incluída. A identificação usa nome e paleta, sem depender do ID do modelo, que pode ter sido excluído. Datas, lotes, formas de pagamento e inscrições não são alterados. Outros eventos e paletas já personalizadas são preservados; a correção não sobrescreve edições feitas depois da atualização.
+
+Em **Eventos e lotes → Editar → Identidade visual**, o botão **Aplicar capa e cores Origens** seleciona o tema, preenche a paleta azul e limpa a URL de capa personalizada. Clique em **Salvar evento** para aplicar à inscrição, ao dashboard e ao login. Essa ação resolve também o caso em que selecionar apenas o tema mantinha uma URL antiga sobrepondo a arte incluída. Cores, logotipo e imagem de capa continuam editáveis. Para outros eventos, escolha Origens ou Personalizada conforme necessário.
 
 A capa `assets/origens-cover.jpg` foi preparada com a ferramenta de edição ImageGen a partir da arte fornecida, preservando o nome Origens, o símbolo e a frase “O fogo permanece”. A edição removeu o QR Code e os textos fixos de data, lote e parcelamento. O mesmo arquivo aparece na inscrição, no dashboard e no login. Nome do lote, valor, condições disponíveis e prazo vêm dos lotes cadastrados e são exibidos como texto. As datas do evento continuam vindo do cadastro; a imagem não altera o calendário nem os contratos das inscrições existentes.
 

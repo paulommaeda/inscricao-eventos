@@ -121,6 +121,10 @@ foreach ([
     ['Tipo' => 'Cartao']
 ] as $extra) {
     queue(transaction($bad, 'tx-mismatch', $extra));
+    if (array_key_exists('Referencia', $extra) && $extra['Referencia'] === null && array_key_exists('NumeroPedido', $extra) && $extra['NumeroPedido'] === null) {
+        queue(['Retorno' => 'ERRO', 'DetalhesErro' => 'Referencia da Transação não localizada']);
+        queue(['Retorno' => 'OK', 'Transacoes' => []]); queue(['Retorno' => 'OK', 'Transacoes' => []]);
+    }
     same(dispatch(notification($bad, ['ID_BknBank' => 'tx-mismatch']))->get_status(), 503, 'Mismatched authoritative identity/value/method rejected');
     same(S::paid($registrationId), 30000, 'Mismatches do not change balance');
 }
@@ -207,12 +211,16 @@ foreach ([
     [['NumeroPedido' => 'foreign-order'], 'número do pedido diferente'],
     [['IdentificadorCheckout' => 'foreign-checkout'], 'checkout diferente'],
     [['ClienteCPFCNPJ' => '00000000000'], 'CPF diferente ou ausente'],
-    [['Referencia' => null, 'NumeroPedido' => null], 'nenhum pedido'],
+    [['Referencia' => null, 'NumeroPedido' => null], 'não confirmou seu vínculo'],
     [['Valor' => 99.99], 'valor da transação'],
     [['Tipo' => 'Cartao'], 'forma de pagamento'],
     [['Referencia' => ['invalid']], 'Campo Referencia inválido']
 ] as [$mismatch, $label]) {
     queue(transaction($diagnostic, 'diagnostic-id', $mismatch));
+    if (array_key_exists('Referencia', $mismatch) && $mismatch['Referencia'] === null && array_key_exists('NumeroPedido', $mismatch) && $mismatch['NumeroPedido'] === null) {
+        queue(['Retorno' => 'ERRO', 'DetalhesErro' => 'Referencia da Transação não localizada']);
+        queue(['Retorno' => 'OK', 'Transacoes' => []]); queue(['Retorno' => 'OK', 'Transacoes' => []]);
+    }
     same(dispatch(notification($diagnostic, ['ID_BknBank' => 'diagnostic-id']))->get_status(), 503, 'Field mismatch still blocks verification');
     $error = S::payment($diagnostic['id'])['last_error'];
     same(str_contains($error, $label), true, 'Field-specific diagnostic: ' . $label);
