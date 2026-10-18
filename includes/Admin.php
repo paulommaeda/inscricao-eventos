@@ -119,6 +119,7 @@ final class Admin
         if (!$lots) { self::lot(0, []); }
         echo '</div><button type="button" class="button" id="ie-add-lot">Adicionar lote</button><template id="ie-lot-template">'; self::lot('__INDEX__', []); echo '</template></div>';
         echo '<div class="ie-panel"><h2>Identidade visual</h2><div class="ie-form-grid">';
+        echo '<label class="ie-field"><span>Identidade do evento</span><select name="brand_preset"><option value="custom" ' . selected($e['brand_preset'] ?? 'custom', 'custom', false) . '>Personalizada</option><option value="origens" ' . selected($e['brand_preset'] ?? '', 'origens', false) . '>Origens — azul e preto</option></select></label><p>Origens inclui a capa sem QR Code. Datas e lote são exibidos dinamicamente. Você pode substituir a capa e editar as cores abaixo.</p>';
         foreach (['logo_url' => 'Logo', 'hero_url' => 'Imagem de capa'] as $key => $label) { echo '<div>'; self::input($key, $label . ' — URL', $e[$key] ?? '', 'url'); echo '<button type="button" class="button ie-media" data-field="' . esc_attr($key) . '">Escolher imagem</button></div>'; }
         self::input('primary_color', 'Cor principal', $e['primary_color'] ?? '#215c4a', 'color');
         self::input('accent_color', 'Cor de destaque', $e['accent_color'] ?? '#d2a45c', 'color');

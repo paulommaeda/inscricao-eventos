@@ -40,6 +40,7 @@ final class Store
                 allow_card tinyint NOT NULL DEFAULT 1,
                 allow_card_physical tinyint NOT NULL DEFAULT 0,
                 physical_card_message text DEFAULT NULL,
+                brand_preset varchar(20) NOT NULL DEFAULT '',
                 minimum_entry bigint NOT NULL DEFAULT 100,
                 logo_url text NOT NULL,
                 hero_url text NOT NULL,
@@ -173,7 +174,7 @@ final class Store
             $engine = $wpdb->get_row($wpdb->prepare('SHOW TABLE STATUS WHERE Name=%s', $table), ARRAY_A);
             if (strtolower($engine['Engine'] ?? '') !== 'innodb') { throw new \RuntimeException('O plugin precisa de tabelas InnoDB para proteger as operações financeiras.'); }
         }
-        foreach (['events' => ['allow_card_physical', 'physical_card_message'], 'registrations' => ['status', 'admin_note', 'updated_at', 'deleted_at'], 'payments' => ['max_installments', 'cpf_snapshot', 'diagnostic_json', 'remote_id_hint', 'webhook_at', 'webhook_error'], 'manuals' => ['registration_id', 'payment_id', 'remote_id', 'request_key', 'reversed_at', 'resolved_at'], 'transactions' => ['cancel_status', 'cancel_operation', 'cancel_requested_at', 'cancel_error', 'cancel_actor']] as $name => $required) {
+        foreach (['events' => ['allow_card_physical', 'physical_card_message', 'brand_preset'], 'registrations' => ['status', 'admin_note', 'updated_at', 'deleted_at'], 'payments' => ['max_installments', 'cpf_snapshot', 'diagnostic_json', 'remote_id_hint', 'webhook_at', 'webhook_error'], 'manuals' => ['registration_id', 'payment_id', 'remote_id', 'request_key', 'reversed_at', 'resolved_at'], 'transactions' => ['cancel_status', 'cancel_operation', 'cancel_requested_at', 'cancel_error', 'cancel_actor']] as $name => $required) {
             $columns = $wpdb->get_col('SHOW COLUMNS FROM ' . self::table($name));
             if (!is_array($columns) || array_diff($required, $columns)) { throw new \RuntimeException('Não foi possível atualizar as colunas da tabela de ' . $name . '. Confira as permissões do banco.'); }
         }
@@ -276,7 +277,7 @@ final class Store
     }
     public static function sample(): array
     {
-        return ['name' => 'Retiro Carnaval 2028', 'description' => 'Um tempo para descansar, fortalecer a fé e viver momentos especiais em comunidade.', 'status' => 'draft', 'registration_start' => '2026-10-17', 'registration_end' => '2027-01-30', 'event_date' => '', 'payment_deadline' => '', 'timezone' => 'America/Sao_Paulo', 'allow_pix' => 1, 'allow_card' => 1, 'allow_card_physical' => 0, 'physical_card_message' => Domain::PHYSICAL_MESSAGE, 'minimum_entry' => '1,00', 'payment_message' => 'O saldo devedor deve ser quitado até o dia do evento: {data}.', 'lots' => [
+        return ['name' => 'Retiro Carnaval 2028', 'description' => 'Um tempo para descansar, fortalecer a fé e viver momentos especiais em comunidade.', 'status' => 'draft', 'registration_start' => '2026-10-17', 'registration_end' => '2027-01-30', 'event_date' => '', 'payment_deadline' => '', 'timezone' => 'America/Sao_Paulo', 'brand_preset' => 'origens', 'primary_color' => '#075ea8', 'accent_color' => '#62c5f4', 'background_color' => '#f0f5fc', 'allow_pix' => 1, 'allow_card' => 1, 'allow_card_physical' => 0, 'physical_card_message' => Domain::PHYSICAL_MESSAGE, 'minimum_entry' => '1,00', 'payment_message' => 'O saldo devedor deve ser quitado até o dia do evento: {data}.', 'lots' => [
             ['name' => 'Lote 1', 'starts_on' => '2026-10-17', 'ends_on' => '2026-11-15', 'price' => '490,00', 'max_installments' => 10, 'note' => ''],
             ['name' => 'Lote 2', 'starts_on' => '2026-11-16', 'ends_on' => '2026-12-31', 'price' => '520,00', 'max_installments' => 8, 'note' => 'Valor a confirmar'],
             ['name' => 'Lote 3', 'starts_on' => '2027-01-01', 'ends_on' => '2027-01-30', 'price' => '550,00', 'max_installments' => 6, 'note' => ''],
@@ -313,6 +314,8 @@ final class Store
         if ($minimum < 1 || $minimum > min(array_column($lots, 'price'))) { throw new \RuntimeException('A entrada mínima deve ser positiva e não pode exceder o menor lote.'); }
         $fields = ['name' => $name, 'description' => wp_kses_post($input['description'] ?? ''), 'location' => Domain::cut(sanitize_text_field($input['location'] ?? ''), 255), 'status' => $status, 'event_date' => $date, 'registration_start' => $start, 'registration_end' => $end, 'payment_deadline' => $deadline, 'timezone' => $tz, 'allow_pix' => $pix, 'allow_card' => $card, 'minimum_entry' => $minimum, 'logo_url' => esc_url_raw($input['logo_url'] ?? '', ['https', 'http']), 'hero_url' => esc_url_raw($input['hero_url'] ?? '', ['https', 'http']), 'terms' => wp_kses_post($input['terms'] ?? ''), 'privacy_url' => esc_url_raw($input['privacy_url'] ?? '', ['https', 'http']), 'payment_message' => sanitize_textarea_field($input['payment_message'] ?? '') ?: 'O saldo devedor deve ser quitado até o dia do evento: {data}.', 'public_page_id' => absint($input['public_page_id'] ?? 0), 'updated_at' => current_time('mysql', true)];
         $fields['allow_card_physical'] = $physical; $fields['physical_card_message'] = Domain::cut(sanitize_textarea_field($input['physical_card_message'] ?? ''), 1000) ?: Domain::PHYSICAL_MESSAGE;
+        $preset = $input['brand_preset'] ?? ($id ? (self::event($id)['brand_preset'] ?? '') : 'custom');
+        $fields['brand_preset'] = $preset === 'origens' ? 'origens' : 'custom';
         foreach (['primary_color' => '#215c4a', 'accent_color' => '#d2a45c', 'background_color' => '#f6f5f0'] as $key => $default) { $fields[$key] = sanitize_hex_color($input[$key] ?? '') ?: $default; }
         $lock = self::lock('event:' . $id);
         try {

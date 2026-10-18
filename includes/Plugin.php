@@ -15,7 +15,7 @@ final class Plugin
         add_action('plugins_loaded', static function () {
             // Auto-updated code may receive a callback before an administrator opens the dashboard.
             if (get_option('ie_schema_version') !== IE_VERSION) { Store::install(); }
-            Access::install();
+            Access::install(); Branding::migrate();
         }, 5);
         add_action('admin_init', static function () {
             if (get_option('ie_schema_version') !== IE_VERSION) { Store::install(); }
@@ -52,8 +52,8 @@ final class Plugin
     public static function shortcode($attributes = []): string
     {
         $a = shortcode_atts(['evento' => '0', 'id' => '0'], $attributes);
-        wp_enqueue_style('ie-public', plugins_url('assets/public.css', IE_FILE), [], IE_VERSION);
-        wp_enqueue_script('ie-public', plugins_url('assets/public.js', IE_FILE), [], IE_VERSION, true);
+        Branding::enqueue(); wp_enqueue_style('ie-public', plugins_url('assets/public.css', IE_FILE), ['ie-brand'], IE_VERSION);
+        wp_enqueue_script('ie-public', plugins_url('assets/public.js', IE_FILE), ['ie-brand'], IE_VERSION, true);
         $config = ['api' => rest_url('inscricao-eventos/v1/'), 'nonce' => is_user_logged_in() ? wp_create_nonce('wp_rest') : ''];
         wp_add_inline_script('ie-public', 'window.IE_CONFIG=' . wp_json_encode($config, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';', 'before');
         return '<div class="ie-app" data-event="' . (int) ($a['evento'] ?: $a['id']) . '"><div class="ie-loading" role="status">Carregando evento…</div><noscript>Ative o JavaScript do navegador para se inscrever e consultar o saldo.</noscript></div>';

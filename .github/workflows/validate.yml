@@ -22,6 +22,7 @@ jobs:
       - run: php tests/manual.php
       - run: php tests/production.php
       - run: php tests/physical.php
+      - run: php tests/portal.php
   browser:
     runs-on: ubuntu-latest
     steps:

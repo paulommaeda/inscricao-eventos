@@ -1,5 +1,10 @@
 (() => {
   'use strict';
+  document.addEventListener('change', event => {
+    if (event.target.matches('[name="brand_preset"]') && event.target.value === 'origens') {
+      Object.entries({ primary_color: '#075ea8', accent_color: '#62c5f4', background_color: '#f0f5fc' }).forEach(([name, value]) => { document.querySelector(`[name="${name}"]`).value = value; });
+    }
+  });
   document.addEventListener('click', event => {
     const button = event.target.closest('button'); if (!button) return;
     if (button.matches('#ie-add-lot')) {

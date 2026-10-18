@@ -2,7 +2,7 @@
 /** Isolated WordPress / gateway doubles. No real payments or emails are sent. */
 define('ABSPATH', __DIR__ . '/');
 define('ARRAY_A', 'ARRAY_A');
-define('IE_VERSION', '1.5.0');
+define('IE_VERSION', '1.6.0');
 define('DAY_IN_SECONDS', 86400); define('HOUR_IN_SECONDS', 3600);
 $GLOBALS['test_options'] = []; $GLOBALS['test_transients'] = []; $GLOBALS['http_queue'] = []; $GLOBALS['http_calls'] = [];
 function wp_salt($scheme) { return 'local-test-salt-never-a-production-secret'; }
@@ -22,9 +22,9 @@ function esc_url_raw($value, $protocols = []) { return $value; }
 function current_time($type, $gmt = false) { return gmdate($type === 'mysql' ? 'Y-m-d H:i:s' : $type); }
 function is_email($value) { return filter_var($value, FILTER_VALIDATE_EMAIL); }
 function is_ssl() { return true; }
-function home_url($path = '') { return 'https://event.test' . $path; }
+function home_url($path = '') { return ($GLOBALS['test_home_base'] ?? 'https://event.test') . $path; }
 function rest_url($path = '') { return 'https://event.test/wp-json/' . $path; }
-function get_permalink($id = 0) { return 'https://event.test/inscricoes'; }
+function get_permalink($id = 0) { return $GLOBALS['test_permalink'] ?? 'https://event.test/inscricoes'; }
 function get_current_user_id() { return 1; }
 function wp_parse_url($url, $component = -1) { return parse_url($url, $component); }
 function add_query_arg($key, $value = null, $url = null) {
@@ -143,4 +143,4 @@ final class TestDB
     }
 }
 $GLOBALS['wpdb'] = new TestDB();
-foreach (['Domain', 'Security', 'Access', 'Store', 'Gateway', 'Manual', 'Payments'] as $class) require_once dirname(__DIR__) . '/includes/' . $class . '.php';
+foreach (['Domain', 'Security', 'Access', 'Branding', 'Store', 'Gateway', 'Manual', 'Payments'] as $class) require_once dirname(__DIR__) . '/includes/' . $class . '.php';

@@ -22,7 +22,7 @@
       data = result;
       const f = result.filters, m = result.metrics, e = result.event, c = result.calendar;
       const primary = /^#[a-f\d]{6}$/i.test(e?.primary_color || '') ? e.primary_color : '#215c4a';
-      root.style.setProperty('--ied-brand', primary);
+      root.style.setProperty('--ied-brand', primary); root.classList.toggle('ie-origens', e?.brand_preset === 'origens');
       const title = e?.name || 'Todos os eventos';
       const stamp = new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(result.updated_at));
       const eventItems = [[0, 'Todos os eventos'], ...result.events.map(item => [item.id, item.name])];
@@ -40,6 +40,7 @@
       const maxDay = Math.max(1, ...result.timeline.map(item => item.count));
       const hiddenExport = Object.entries(f).map(([key, value]) => `<input type="hidden" name="${esc(key)}" value="${esc(value)}">`).join('');
       root.innerHTML = `
+        ${e?.brand_preset === 'origens' ? window.IEBrand.cover(e, c?.active_lot) : ''}
         <header class="ied-header">
           <div><span class="ied-eyebrow">PAINEL DA ORGANIZAÇÃO</span><h2>${esc(title)}</h2>
             <p>${e ? `${esc(day(e.event_date))}${e.location ? ` <span aria-hidden="true">·</span> ${esc(e.location)}` : ''}` : 'Inscrições e financeiro em um só lugar'}</p>
@@ -72,7 +73,7 @@
         <div class="ied-overview">
           <article class="ied-panel ied-collection"><div class="ied-section-title"><h3>Quitação do valor contratado</h3><strong>${number.format(m.progress)}%</strong></div>${progress(m.progress, 'Percentual quitado do valor contratado')}<div class="ied-key"><span><i class="ied-dot ied-dot-paid"></i>${money(m.covered)} quitados</span><span><i class="ied-dot ied-dot-pending"></i>${money(m.balance)} a receber</span></div>
             <div class="ied-operational"><div><small>Inscrições</small><b>${c ? c.open ? 'Abertas' : 'Fechadas' : 'Por evento'}</b></div><div><small>Lote vigente</small><b>${esc(c?.active_lot?.name || 'Nenhum')}</b></div><div><small>Prazo de quitação</small><b>${esc(c ? countdown(c.deadline_days) : 'Por evento')}</b></div></div>
-            ${c?.active_lot ? `<p class="ied-hint">${esc(money(c.active_lot.price))} · cartão até ${c.active_lot.installments}x · lote até ${esc(day(c.active_lot.ends_on))}</p>` : ''}
+            ${c?.active_lot ? `<p class="ied-hint">${esc(money(c.active_lot.price))} · ${e?.allow_card ? `cartão online até ${c.active_lot.installments}x` : e?.allow_card_physical ? 'cartão físico na secretaria' : 'PIX'} · lote até ${esc(day(c.active_lot.ends_on))}</p>` : ''}
           </article>
           <article class="ied-panel"><h3>Situação dos pagamentos</h3><div class="ied-status-chart"><div class="ied-donut" style="--ied-paid-angle:${paidAngle}deg;--ied-partial-angle:${partialAngle}deg" aria-hidden="true"><span>${number.format(m.count)}<small>inscrições</small></span></div><ul>${statuses.map(([count, label, key]) => `<li><i class="ied-dot ied-dot-${key}"></i><span>${label}</span><b>${number.format(count)}</b></li>`).join('')}</ul></div></article>
         </div>
@@ -86,11 +87,11 @@
           <div class="ied-table-wrap"><table><thead><tr><th>Participante</th><th>Lote / forma do cadastro</th><th>Valor</th><th>Recebido</th><th>A receber</th><th>Situação</th><th>Cadastro</th><th>Ações</th></tr></thead><tbody>
             ${result.registrations.length ? result.registrations.map(r => {
               const created = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: result.date_timezone }).format(new Date(r.created_at.replace(' ', 'T') + 'Z'));
-              return `<tr><td><b>${esc(r.name)}</b><small>#${r.id} · ${esc(r.email)}</small><small>${esc(r.phone)}</small>${!e ? `<small>${esc(r.event_name)}</small>` : ''}</td><td>${esc(r.lot_name)}<small>${esc(labels[r.method] || r.method)}</small></td><td>${esc(money(r.total))}</td><td class="ied-money-paid">${esc(money(r.paid))}${r.overpaid ? `<small>Excedente ${esc(money(r.overpaid))}</small>` : ''}</td><td>${esc(money(r.balance))}</td><td><span class="ied-badge ied-badge-${esc(r.status)}">${esc(r.overpaid ? 'Excedente' : labels[r.status] || r.status)}</span><small>${esc(labels[r.registration_status] || r.registration_status)}${r.alerts ? ' · Conferir pendência' : ''}</small></td><td>${esc(created)}</td><td><a class="ied-button" href="${esc(r.detail_url)}">${result.can_manage ? 'Detalhes / editar' : 'Consultar detalhes'}</a></td></tr>`;
+              return `<tr><td><b>${esc(r.name)}</b><small>#${r.id} · ${esc(r.email)}</small><small>${esc(r.phone)}</small>${!e ? `<small>${esc(r.event_name)}</small>` : ''}</td><td>${esc(r.lot_name)}<small>${esc(labels[r.method] || r.method)}</small></td><td>${esc(money(r.total))}</td><td class="ied-money-paid">${esc(money(r.paid))}${r.overpaid ? `<small>Excedente ${esc(money(r.overpaid))}</small>` : ''}</td><td>${esc(money(r.balance))}</td><td><span class="ied-badge ied-badge-${esc(r.status)}">${esc(r.overpaid ? 'Excedente' : labels[r.status] || r.status)}</span><small>${esc(labels[r.registration_status] || r.registration_status)}${r.alerts ? ' · Conferir pendência' : ''}</small></td><td>${esc(created)}</td><td><button type="button" class="ied-button" data-registration="${r.id}">${result.can_manage ? 'Detalhes / editar' : 'Consultar detalhes'}</button></td></tr>`;
             }).join('') : '<tr><td colspan="8" class="ied-empty">Nenhuma inscrição para estes filtros.</td></tr>'}
           </tbody></table></div>
           <div class="ied-pagination"><button type="button" class="ied-button" data-page="${result.pagination.page - 1}" ${result.pagination.page === 1 ? 'disabled' : ''}>Anterior</button><span>Página ${result.pagination.page} de ${result.pagination.pages}</span><button type="button" class="ied-button" data-page="${result.pagination.page + 1}" ${result.pagination.page >= result.pagination.pages ? 'disabled' : ''}>Próxima</button></div>
-        </article><footer class="ied-footer">${result.can_manage ? 'Perfil administrador' : 'Gerente de Eventos · somente consulta'}. <a href="${esc(config.eventsUrl)}">${result.can_manage ? 'Gerenciar' : 'Consultar'} eventos e lotes</a></footer>`;
+        </article><footer class="ied-footer">${result.can_manage ? 'Perfil administrador' : 'Gerente de Eventos · somente consulta'}. <a href="${esc(config.logoutUrl)}">Sair</a></footer>`;
     }
     function formFilters() {
       const values = Object.fromEntries(new FormData(root.querySelector('.ied-filters')));
@@ -115,6 +116,7 @@
         let message = root.querySelector('.ied-message');
         if (!message) { root.innerHTML = '<div class="ied-message" role="alert"></div><button type="button" class="ied-button" data-refresh>Tentar novamente</button>'; message = root.querySelector('.ied-message'); }
         message.textContent = error.message; message.classList.add('ied-message-error');
+        if (/sessão expirou|não possui acesso/.test(error.message)) { const login = document.createElement('a'); login.href = config.loginUrl; login.textContent = ' Entrar no dashboard'; message.append(login); }
         root.querySelectorAll('button').forEach(button => { button.disabled = false; });
         const exporter = root.querySelector('.ied-export button'); if (exporter) exporter.disabled = true;
         root.querySelectorAll('[data-page]').forEach(button => { button.disabled = !data || Number(button.dataset.page) < 1 || Number(button.dataset.page) > data.pagination.pages; });
@@ -128,6 +130,7 @@
     });
     root.addEventListener('click', event => {
       const button = event.target.closest('button'); if (!button) return;
+      if (button.hasAttribute('data-registration')) window.IERegistrationPanel.open({ id: Number(button.dataset.registration), event: data.filters.event, all_scopes: data.filters.all_scopes, config, onSaved: () => load(applied) });
       if (button.hasAttribute('data-refresh')) load(applied);
       if (button.hasAttribute('data-page')) load({ ...applied, page: Number(button.dataset.page) });
       if (button.hasAttribute('data-clear')) load({ event: fixedEvent || data.filters.event, page: 1 });

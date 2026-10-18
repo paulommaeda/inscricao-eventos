@@ -27,8 +27,8 @@ final class Api
         if ($id) { $e = Store::event($id); $rows = $admin || in_array($e['status'], ['published', 'archived'], true) ? [$e] : []; }
         else { $rows = Store::events(true); }
         return array_map(static function ($e) {
-            $lots = Store::lots((int) $e['id']); $today = Domain::today($e); $lot = Domain::quote($e, $lots, $today);
-            $info = array_intersect_key($e, array_flip(['name', 'description', 'location', 'event_date', 'registration_start', 'registration_end', 'payment_deadline', 'logo_url', 'hero_url', 'primary_color', 'accent_color', 'background_color', 'terms', 'privacy_url', 'payment_message', 'timezone']));
+            $e = Branding::present($e); $lots = Store::lots((int) $e['id']); $today = Domain::today($e); $lot = Domain::quote($e, $lots, $today);
+            $info = array_intersect_key($e, array_flip(['name', 'description', 'location', 'event_date', 'registration_start', 'registration_end', 'payment_deadline', 'logo_url', 'hero_url', 'cover_url', 'brand_preset', 'primary_color', 'accent_color', 'background_color', 'terms', 'privacy_url', 'payment_message', 'timezone']));
             $info['id'] = (int) $e['id']; $info['minimum_entry'] = (int) $e['minimum_entry']; $info['allow_pix'] = (bool) $e['allow_pix']; $info['allow_card'] = (bool) $e['allow_card'];
             $info['allow_card_physical'] = !empty($e['allow_card_physical']); $info['physical_card_message'] = Domain::physicalMessage($e);
             $info['lots'] = array_map(static fn($l) => ['id' => (int) $l['id'], 'name' => $l['name'], 'starts_on' => $l['starts_on'], 'ends_on' => $l['ends_on'], 'price' => (int) $l['price'], 'max_installments' => (int) $l['max_installments'], 'note' => $l['note']], $lots);

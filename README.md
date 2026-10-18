@@ -13,6 +13,20 @@ Plugin reutilizável para inscrições com lotes, identidade visual própria, ca
 
 Requisitos: WordPress 6.4+, PHP 8.1+, OpenSSL e MySQL/MariaDB com InnoDB. Não depende de WooCommerce nem dos plugins K8 anteriores.
 
+## Dashboard, login e detalhes em modal (1.6.0)
+
+Na página da organização, mantenha `[inscricao_eventos_dashboard evento="1"]` ou `[dashboard_evento id="1"]`. Um visitante vê o formulário **Entrar no dashboard** nessa página. A autenticação usa a conta WordPress; após entrar, o participante da organização retorna diretamente ao dashboard. Erros de credenciais também retornam ao formulário, sem expor informações sobre contas. O formulário exige nonce vinculado ao navegador, limita tentativas e valida o endereço local de retorno. A página e a API privada enviam orientação para não armazenar dados em cache.
+
+Em **Usuários → Editar usuário → Função**, atribua **Gerente de Eventos** a quem deve consultar inscrições, filtros, financeiro, CSV e detalhes. O perfil continua somente com consulta. A barra administrativa fica oculta para o gerente no site; o login WordPress convencional usa como destino a página de dashboard reconhecida quando um administrador abre seu shortcode.
+
+Os botões **Consultar detalhes** e **Detalhes / editar** abrem um modal na própria página. Gerentes podem ler resumo, pagamentos, baixas e histórico. Administradores também podem editar o cadastro, registrar/reverter/vincular baixas, sincronizar e conferir pagamentos K8, solicitar cancelamento/estorno e usar lixeira/restauração/exclusão permanente. As ações seguem as confirmações e regras financeiras já documentadas abaixo. O modal usa os mesmos serviços do painel, preserva preço/lote/parcelas e atualiza o dashboard após salvar. O servidor verifica o perfil, o nonce, o evento e a conta; conhecer IDs ou alterar campos no navegador não concede edição a gerentes.
+
+## Identidade Origens e capa dinâmica
+
+A atualização aplica a identidade azul e preta ao evento criado pelo modelo original do retiro. Outros eventos conservam sua identidade. Em **Eventos e lotes → Editar → Identidade visual**, escolha **Origens — azul e preto** ou **Personalizada**. Cores, logotipo e imagem de capa continuam editáveis; sem uma capa personalizada, Origens usa a arte incluída no plugin.
+
+A capa `assets/origens-cover.jpg` foi preparada com a ferramenta de edição ImageGen a partir da arte fornecida, preservando o nome Origens, o símbolo e a frase “O fogo permanece”. A edição removeu o QR Code e os textos fixos de data, lote e parcelamento. O mesmo arquivo aparece na inscrição, no dashboard e no login. Nome do lote, valor, condições disponíveis e prazo vêm dos lotes cadastrados e são exibidos como texto. As datas do evento continuam vindo do cadastro; a imagem não altera o calendário nem os contratos das inscrições existentes.
+
 ## Modelo inicial do retiro
 
 O modelo nasce como **rascunho**, pois a data exata do evento não foi informada. O título conserva “Carnaval 2028”, e as datas de inscrição conservam o pedido e a imagem. A imagem menciona encerramento uma semana antes de um evento em 2027; confira essa diferença ao publicar.
@@ -124,7 +138,7 @@ O perfil é criado automaticamente na atualização/ativação. Em **Usuários �
 | Baixa manual, reversão, conciliação, cancelamento e estorno | Sim | Não |
 | Credenciais, configurações e teste K8 | Sim | Não |
 
-Os gerentes podem usar o mesmo shortcode de dashboard já instalado e têm acompanhamento/consulta de eventos no WordPress. A interface oculta controles de alteração, e os controladores rejeitam escrita mesmo com URL direta e nonce válido. Somente administradores (`manage_options`) realizam baixas e demais operações de gestão. O perfil não concede edição de usuários, posts, arquivos ou plugins.
+Os gerentes podem usar o mesmo shortcode de dashboard já instalado, com login na página e consulta dos detalhes em modal. A interface oculta controles de alteração, e os controladores rejeitam escrita mesmo com URL direta e nonce válido. Somente administradores (`manage_options`) realizam baixas e demais operações de gestão. O perfil não concede edição de usuários, posts, arquivos ou plugins.
 
 ## Shortcodes e marca
 
@@ -165,7 +179,7 @@ Crie uma página para a organização e adicione:
 
 Troque `1` pelo ID do evento. Também aceita `[dashboard_evento id="1"]`. Sem ID, `[inscricao_eventos_dashboard]` permite escolher um evento ou acompanhar todos. A lista de eventos mostra o shortcode de cada um.
 
-O acesso exige uma conta WordPress administradora (`manage_options`) ou **Gerente de Eventos** (`ie_view_events`). Gerentes consultam, filtram, leem os detalhes e exportam CSV, sem ações de alteração. Visitantes e contas sem esses acessos recebem apenas uma indicação de acesso restrito; a API também verifica permissão, usa o nonce REST autenticado e não permite cache dos dados financeiros. Páginas com esse shortcode sinalizam `DONOTCACHEPAGE`. Se o cache externo ignorar esse sinal, exclua a página do cache para manter login e nonce atualizados.
+O acesso exige uma conta WordPress administradora (`manage_options`) ou **Gerente de Eventos** (`ie_view_events`). Gerentes consultam, filtram, leem os detalhes e exportam CSV, sem ações de alteração. Visitantes recebem o formulário de login na página; contas sem permissão recebem a orientação de acesso restrito; a API também verifica permissão, usa o nonce REST autenticado e não permite cache dos dados financeiros. Páginas com esse shortcode sinalizam `DONOTCACHEPAGE`. Se o cache externo ignorar esse sinal, exclua a página do cache para manter login e nonce atualizados.
 
 O painel mostra:
 
@@ -173,7 +187,7 @@ O painel mostra:
 - Dias até o evento, prazo para quitar, situação das inscrições e lote vigente, usando o fuso configurado. Data não configurada aparece como **A definir**; datas passadas são identificadas.
 - Financeiro por lote (nome congelado na inscrição), recebimentos por meio efetivamente pago, evolução dos cadastros e alertas de conferência, erro, cancelamento/estorno em andamento, excedentes e saldo após o prazo.
 - Filtros por evento, lote, pagamento, forma do cadastro, situação da inscrição, nome/e-mail/CPF completo e período de cadastro. O período inclui os dias completos no fuso do evento; na visão de todos os eventos usa UTC. O gráfico de cadastros usa UTC e os últimos 30 dias com registros.
-- Lista com contatos, valores, saldo, paginação de 25 registros e acesso aos detalhes/edição no WordPress, em modo de consulta para gerentes. CSV aplica exatamente os mesmos filtros, incluindo lote, período e contas/ambientes.
+- Lista com contatos, valores, saldo, paginação de 25 registros e acesso aos detalhes/edição em modal na mesma página, em modo de consulta para gerentes. CSV aplica exatamente os mesmos filtros, incluindo lote, período e contas/ambientes.
 
 Os totais e gráficos correspondem às inscrições filtradas, não apenas à página da tabela. O padrão usa inscrições ativas e a conta/ambiente K8 atual. Cartão aprovado é reconhecido integralmente como confirmado; não é uma demonstração de liquidação bancária ou de taxas do K8. Pagamentos excedentes permanecem destacados e não compensam a dívida de outras pessoas. As datas filtram o cadastro; o financeiro inclui créditos K8 e baixas manuais ativas dessas inscrições, sem duplicar a baixa provisória conciliada. **Atualizar** lê o saldo local conferido, sem emitir cobranças ou solicitar estornos; conciliação permanece nas ações de detalhe, cron e retornos.
 
@@ -235,6 +249,8 @@ php tests/authentication.php
 php tests/webhook.php
 php tests/management.php
 php tests/dashboard.php
+php tests/physical.php
+php tests/portal.php
 php tests/installments.php
 php tests/manual.php
 php tests/production.php
@@ -275,3 +291,5 @@ Essa configuração está documentada em [Browser Integrity Check — desativaç
 Após atualizar o plugin e ajustar o bloqueio identificado, solicite ao K8 o reenvio da notificação da transação existente. Para conciliar um pagamento já realizado pelo painel WordPress, abra o detalhe da inscrição, informe o **ID completo da transação K8** (não o ID do checkout) e clique em **Consultar e conciliar no K8**. A ação consulta o K8 e não emite cobrança. Não peça outro pagamento para corrigir uma confirmação que falhou.
 
 “Object reference not set to an instance of an object” é uma mensagem de exceção registrada pelo K8; o texto sozinho não identifica a resposta HTTP recebida nem demonstra que o erro nasceu no WordPress. Se persistir após a liberação da rota, solicite ao suporte K8 o status HTTP, o corpo da resposta e o ID completo da transação relativos à tentativa, ocultando tokens e dados pessoais.
+
+Os testes de portal usam contas fictícias para verificar login e retorno à página, proteção de nonce/cookie e redirecionamento, dados privados, isolamento por evento/conta e bloqueio de todas as mutações para gerentes. No navegador, o formulário de login, a edição e a baixa/reversão pelo modal usam os controladores PHP com WordPress/banco/K8 simulados. A capa é verificada no celular e com a mudança do lote ativo.

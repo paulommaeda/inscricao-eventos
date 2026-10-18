@@ -3,6 +3,8 @@ require_once __DIR__ . '/bootstrap.php';
 require_once dirname(__DIR__) . '/includes/Registrations.php';
 require_once dirname(__DIR__) . '/includes/Reports.php';
 require_once dirname(__DIR__) . '/includes/Api.php';
+require_once dirname(__DIR__) . '/includes/DashboardLogin.php';
+require_once dirname(__DIR__) . '/includes/RegistrationPanel.php';
 require_once dirname(__DIR__) . '/includes/Dashboard.php';
 require_once dirname(__DIR__) . '/includes/Admin.php';
 $GLOBALS['test_admin'] = true;
@@ -37,3 +39,22 @@ class TestRole {
 }
 function get_role($name) { return $GLOBALS['test_roles'][$name] ?? null; }
 function add_role($name, $label, $capabilities) { if (get_role($name)) return null; return $GLOBALS['test_roles'][$name] = new TestRole($name, $capabilities); }
+
+// WordPress authentication doubles. The browser fixture uses fictional users only.
+function wp_verify_nonce($nonce, $action) { return is_string($nonce) && hash_equals(wp_create_nonce($action), $nonce); }
+function get_post_status($id) { return $GLOBALS['test_post_status'][$id] ?? 'publish'; }
+function get_queried_object_id() { return $GLOBALS['test_page_id'] ?? 0; }
+function wp_logout_url($redirect) { return add_query_arg('ie_logout', '1', $redirect); }
+function wp_lostpassword_url($redirect) { return home_url('/wp-login.php?action=lostpassword&redirect_to=' . urlencode($redirect)); }
+function wp_validate_redirect($url, $fallback = '') { $scheme = parse_url($url, PHP_URL_SCHEME); $host = parse_url($url, PHP_URL_HOST); return (!$scheme || in_array($scheme, ['http', 'https'], true)) && (!$host || $host === parse_url(home_url('/'), PHP_URL_HOST)) ? $url : $fallback; }
+function user_can($user, $cap) { return !empty($user->caps[$cap]); }
+function wp_signon($credentials, $secure = false) {
+    $GLOBALS['test_signon_calls'][] = $credentials;
+    $name = $credentials['user_login'];
+    if (!in_array($name, ['admin.fixture', 'gerente.fixture', 'pessoa.fixture'], true) || $credentials['user_password'] !== 'SenhaFicticia!') return new WP_Error('invalid_login', 'Invalid fixture credentials');
+    $role = $name === 'admin.fixture' ? 'admin' : ($name === 'gerente.fixture' ? 'manager' : 'person');
+    if (!headers_sent()) setcookie('ie_test_' . $role, '1', ['path' => '/', 'httponly' => true, 'samesite' => 'Lax']);
+    return (object) ['ID' => $role === 'admin' ? 1 : 2, 'caps' => ['manage_options' => $role === 'admin', 'ie_view_events' => $role !== 'person']];
+}
+function wp_set_current_user($id) { $GLOBALS['test_logged_in'] = true; return (object) ['ID' => $id]; }
+function wp_logout() { foreach (['admin','manager','person'] as $r) if (!headers_sent()) setcookie('ie_test_' . $r, '', ['path' => '/', 'expires' => 1]); $GLOBALS['test_admin'] = false; $GLOBALS['test_manager'] = false; $GLOBALS['test_logged_in'] = false; }

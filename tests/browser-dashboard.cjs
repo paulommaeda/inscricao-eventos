@@ -1,19 +1,28 @@
 /* Actual shortcode, report SQL and authenticated endpoint; synthetic records only. */
 const { chromium } = require('playwright');
 const { spawn } = require('node:child_process');
-const fs = require('node:fs'); const path = require('node:path'); const net = require('node:net');
+const os = require('node:os'); const fs = require('node:fs'); const path = require('node:path'); const net = require('node:net');
 const assert = require('node:assert/strict');
 (async () => {
   const probe = net.createServer(); await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve)); const port = probe.address().port; await new Promise(resolve => probe.close(resolve));
-  const base = `http://127.0.0.1:${port}`;
-  const server = spawn(process.env.IE_TEST_PHP || 'php', ['-d', 'error_reporting=E_ALL', '-d', 'display_errors=0', '-d', 'opcache.jit=0', '-d', 'opcache.jit_buffer_size=0', '-S', `127.0.0.1:${port}`, path.join(__dirname, 'dashboard-fixture.php')], { stdio: ['ignore', 'ignore', 'pipe'] });
+  const base = `http://127.0.0.1:${port}`; const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ie-dashboard-test-'));
+  const server = spawn(process.env.IE_TEST_PHP || 'php', ['-d', 'error_reporting=E_ALL', '-d', 'display_errors=0', '-d', 'opcache.jit=0', '-d', 'opcache.jit_buffer_size=0', '-S', `127.0.0.1:${port}`, path.join(__dirname, 'dashboard-fixture.php')], { env: { ...process.env, IE_DASH_STATE: path.join(directory, 'state.json') }, stdio: ['ignore', 'ignore', 'pipe'] });
   let logs = '', browser; server.stderr.on('data', value => { logs += value; });
   try {
     for (let i = 0; i < 50; i++) { try { await fetch(base); break; } catch { await new Promise(resolve => setTimeout(resolve, 100)); } }
     browser = await chromium.launch({ headless: true, ...(process.env.IE_TEST_CHROMIUM ? { executablePath: process.env.IE_TEST_CHROMIUM, args: ['--no-sandbox', '--disable-dev-shm-usage'] } : {}) });
     const visitor = await browser.newPage(); await visitor.goto(base);
     assert.match(await visitor.textContent('body'), /restrito a administradores/); assert.equal(await visitor.locator('.ied-metric').count(), 0);
-    assert.equal((await visitor.request.get(base + '/api/dashboard?event=1')).status(), 403); await visitor.close();
+    assert.equal((await visitor.request.get(base + '/api/dashboard?event=1')).status(), 403);
+    assert.equal(await visitor.locator('.ied-login-form').count(), 1);
+    if (process.env.IE_TEST_ARTIFACTS) { fs.mkdirSync(process.env.IE_TEST_ARTIFACTS, { recursive: true }); await visitor.screenshot({ path: path.join(process.env.IE_TEST_ARTIFACTS, 'dashboard-login.png'), fullPage: true }); }
+    await visitor.locator('[name="log"]').fill('gerente.fixture'); await visitor.locator('[name="pwd"]').fill('incorreta');
+    await visitor.getByRole('button', { name: 'Entrar no dashboard' }).click(); await visitor.locator('.ied-login-error').waitFor(); assert.match(await visitor.locator('.ied-login-error').textContent(), /Confira seu usuário/);
+    assert.equal(new URL(visitor.url()).pathname, '/'); assert.equal(await visitor.locator('.ied-metric').count(), 0);
+    await visitor.locator('[name="log"]').fill('gerente.fixture'); await visitor.locator('[name="pwd"]').fill('SenhaFicticia!');
+    await visitor.getByRole('button', { name: 'Entrar no dashboard' }).click(); await visitor.locator('.ie-dashboard[aria-busy="false"] .ied-metric').first().waitFor();
+    assert.equal(visitor.url(), base + '/'); assert.match(await visitor.locator('.ied-footer').textContent(), /somente consulta/);
+    await visitor.getByRole('link', { name: 'Sair', exact: true }).click(); await visitor.locator('.ied-login-form').waitFor(); await visitor.close();
     const context = await browser.newContext({ viewport: { width: 1440, height: 1080 }, acceptDownloads: true });
     await context.addCookies([{ name: 'ie_test_admin', value: '1', url: base }]);
     const page = await context.newPage(); const errors = []; page.on('pageerror', error => errors.push(error.message));
@@ -25,7 +34,23 @@ const assert = require('node:assert/strict');
     assert.equal(await page.locator('.ied-registration-panel tbody tr').count(), 25);
     assert.equal(await page.locator('.ied-filters [name="event"]').isDisabled(), true);
     assert.equal((await page.request.get(base + '/api/dashboard?event=1')).status(), 403, 'Cookie without wp_rest nonce is denied');
-    const detailsUrl = await page.locator('.ied-registration-panel tbody a').first().getAttribute('href'); assert.match(detailsUrl, /ie-dashboard&view=30/);
+    assert.equal(await page.locator('.ied-registration-panel tbody a').count(), 0);
+    const beforeDetail = page.url(); await page.locator('[data-registration="30"]').click(); await page.locator('.ied-modal[open] [data-modal-tab="edit"]').waitFor();
+    assert.equal(page.url(), beforeDetail); assert.match(await page.locator('.ied-modal').textContent(), /Participante 30/);
+    await page.locator('[data-modal-tab="edit"]').click(); await page.locator('.ied-modal [name="name"]').fill('Participante Atualizado'); await page.locator('.ied-modal [name="cpf"]').fill('11144477735');
+    await page.getByRole('button', { name: 'Salvar inscrição', exact: true }).click(); await page.getByText('Alteração registrada. Saldo e histórico atualizados.', { exact: true }).waitFor();
+    assert.match(await page.locator('.ied-modal h2').textContent(), /Atualizado/);
+    if (process.env.IE_TEST_ARTIFACTS) await page.screenshot({ path: path.join(process.env.IE_TEST_ARTIFACTS, 'modal-edit-desktop.png') });
+    await page.locator('[data-modal-tab="payments"]').click();
+    const receipt = page.locator('.ied-modal [data-panel-action="manual"][data-payment="0"]'); await receipt.locator('..').locator('summary').click();
+    await receipt.locator('[name="amount"]').fill('50'); await receipt.locator('[name="method"]').selectOption('CartaoPOS'); await receipt.locator('[name="note"]').fill('Comprovante maquininha teste'); await receipt.locator('[name="confirmed"]').check();
+    await receipt.getByRole('button', { name: 'Registrar baixa manual', exact: true }).click(); await page.getByText('Alteração registrada. Saldo e histórico atualizados.', { exact: true }).waitFor();
+    assert.match(await page.locator('.ied-modal-footer').textContent(), /150,00 recebidos/);
+    const reversal = page.locator('.ied-modal [data-panel-action="reverse_manual"]').first(); await reversal.locator('..').locator('summary').click();
+    await reversal.locator('[name="note"]').fill('Correção do comprovante de teste'); await reversal.locator('[name="confirmed"]').check(); await reversal.getByRole('button', { name: 'Reverter baixa manual', exact: true }).click();
+    await page.getByText('Alteração registrada. Saldo e histórico atualizados.', { exact: true }).waitFor(); assert.match(await page.locator('.ied-modal-footer').textContent(), /100,00 recebidos/);
+    await page.locator('[data-close]').first().click();
+    assert.match(await page.locator('.ied-registration-panel tbody').textContent(), /Atualizado/); assert.equal(page.url(), beforeDetail);
     if (process.env.IE_TEST_ARTIFACTS) { fs.mkdirSync(process.env.IE_TEST_ARTIFACTS, { recursive: true }); await page.screenshot({ path: path.join(process.env.IE_TEST_ARTIFACTS, 'dashboard-desktop.png'), fullPage: true }); }
     await page.getByRole('button', { name: 'Próxima', exact: true }).click(); await ready(); assert.equal(await page.locator('.ied-registration-panel tbody tr').count(), 5);
     await page.locator('.ied-filters [name="method"]').selectOption('Pix'); await apply(); assert.equal(await count(), 20);
@@ -53,15 +78,23 @@ const assert = require('node:assert/strict');
     await managerContext.addCookies([{ name: 'ie_test_manager', value: '1', url: base }, { name: 'ie_manual_fixture', value: '1', url: base }]);
     const manager = await managerContext.newPage(); await manager.goto(base); await manager.locator('.ie-dashboard[aria-busy="false"] .ied-metric').first().waitFor();
     assert.match(await manager.locator('.ied-footer').textContent(), /Gerente de Eventos.*somente consulta/);
-    assert.equal(await manager.getByRole('link', { name: 'Detalhes / editar', exact: true }).count(), 0);
-    assert.equal(await manager.getByRole('link', { name: 'Consultar detalhes', exact: true }).count(), 25);
+    assert.equal(await manager.getByRole('button', { name: 'Detalhes / editar', exact: true }).count(), 0);
+    assert.equal(await manager.getByRole('button', { name: 'Consultar detalhes', exact: true }).count(), 25);
     assert.match(await manager.locator('.ied-metric-received').textContent(), /8\.250,00/); assert.match(await manager.locator('.ied-metric-received').textContent(), /100,00 manual/);
     assert.match(await manager.locator('.ied-breakdowns').textContent(), /Dinheiro/);
     const managerCsv = manager.waitForEvent('download'); await manager.getByRole('button', { name: 'Exportar CSV', exact: true }).click(); assert.match(fs.readFileSync(await (await managerCsv).path(), 'utf8'), /Baixa manual ativa/);
     assert(await manager.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
     if (process.env.IE_TEST_ARTIFACTS) await manager.screenshot({ path: path.join(process.env.IE_TEST_ARTIFACTS, 'manager-dashboard-mobile.png'), fullPage: true });
+    await manager.locator('[data-registration="30"]').click(); await manager.locator('.ied-modal[open] [data-modal-tab="payments"]').waitFor();
+    assert.equal(await manager.locator('.ied-modal form').count(), 0); assert.equal(await manager.locator('[data-modal-tab="edit"],[data-modal-tab="options"]').count(), 0);
+    await manager.locator('[data-modal-tab="payments"]').click(); assert.match(await manager.locator('.ied-modal').textContent(), /Pagamentos K8/);
+    assert.equal(await manager.locator('.ied-modal form').count(), 0);
+    const nonce = await manager.evaluate(() => window.IE_DASHBOARD.nonce);
+    const forged = await manager.request.post(base + '/api/registration/30?event=1', { headers: { 'X-WP-Nonce': nonce }, data: { action: 'manual', amount: '1', confirmed: true, method: 'CartaoPOS', request_token: 'a'.repeat(64) } }); assert.equal(forged.status(), 403);
+    if (process.env.IE_TEST_ARTIFACTS) await manager.screenshot({ path: path.join(process.env.IE_TEST_ARTIFACTS, 'modal-manager-mobile.png') });
+    await manager.keyboard.press('Escape'); assert.equal(await manager.locator('.ied-modal[open]').count(), 0);
     await managerContext.close();
     assert.deepEqual(errors, []); assert(!/Warning:|Fatal error:|Deprecated:/.test(logs), logs);
-    console.log('OK: authenticated admin/manager dashboard, real SQL totals including manual receipts, read-only actions, filters, pagination, matching CSV and mobile layout.');
-  } finally { if (browser) await browser.close(); server.kill(); }
+    console.log('OK: inline login + redirect, Origens banner, admin/manager modal + receipt/reversal, manager mutation denied, real SQL totals including manual receipts, read-only actions, filters, pagination, matching CSV and mobile layout.');
+  } finally { if (browser) await browser.close(); server.kill(); fs.rmSync(directory, { recursive: true, force: true }); }
 })().catch(error => { console.error(error); process.exit(1); });

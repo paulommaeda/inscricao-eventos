@@ -52,10 +52,10 @@ function makeAccount(method = 'Pix', paid = 10000) {
       }
       res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)); return;
     }
-    if (['/public.css', '/public.js'].includes(url.pathname)) {
-      res.setHeader('Content-Type', url.pathname.endsWith('.css') ? 'text/css' : 'application/javascript'); res.end(fs.readFileSync(url.pathname === '/public.js' && process.env.IE_TEST_PUBLIC_JS ? process.env.IE_TEST_PUBLIC_JS : path.join(plugin, 'assets', url.pathname.slice(1)))); return;
+    if (['/public.css', '/public.js', '/brand.css', '/brand.js', '/origens-cover.jpg'].includes(url.pathname)) {
+      res.setHeader('Content-Type', url.pathname.endsWith('.jpg') ? 'image/jpeg' : (url.pathname.endsWith('.css') ? 'text/css' : 'application/javascript')); res.end(fs.readFileSync(url.pathname === '/public.js' && process.env.IE_TEST_PUBLIC_JS ? process.env.IE_TEST_PUBLIC_JS : path.join(plugin, 'assets', url.pathname.slice(1)))); return;
     }
-    res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end('<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/public.css"><style>body{margin:0;padding:16px;background:#ecefe8}</style><div class="ie-app" data-event="1"></div><script>window.IE_CONFIG={api:"/api/",nonce:""}</script><script src="/public.js"></script></html>');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end('<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/public.css"><link rel="stylesheet" href="/brand.css"><style>body{margin:0;padding:16px;background:#ecefe8}</style><div class="ie-app" data-event="1"></div><script>window.IE_CONFIG={api:"/api/",nonce:""}</script><script src="/brand.js"></script><script src="/public.js"></script></html>');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = 'http://127.0.0.1:' + server.address().port;
@@ -145,7 +145,11 @@ function makeAccount(method = 'Pix', paid = 10000) {
   assert.equal(await page.locator('.ie-success').count(), 0);
   retryReturn = true; await page.goto(base + '?ie_return=1&ie_event=1&ie_payment=8&ID_BknBank=bank-return-id'); await page.locator('.ie-account').waitFor();
   await page.locator('[data-action="refresh"]').click(); assert.deepEqual(calls.findLast(c => c.route === '/api/refresh').input, { remote_id: 'bank-return-id', payment_id: 8 });
-  retryReturn = false; await page.locator('[data-action="refresh"]').click(); await page.locator('[data-action="refresh"]').click();
+  retryReturn = false;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const refreshed = page.waitForResponse(response => response.url() === base + '/api/refresh'); await page.locator('[data-action="refresh"]').click(); await refreshed;
+    await page.waitForFunction(() => document.querySelector('.ie-app')?.getAttribute('aria-busy') === 'false');
+  }
   assert.deepEqual(calls.findLast(c => c.route === '/api/refresh').input, {});
   failRefresh = true; await page.goto(base + '?ie_return=1&ie_event=1&ie_payment=8&ID_BknBank=bank-return-id'); await page.locator('.ie-account').waitFor();
   assert.match(await page.locator('.ie-alert').textContent(), /temporariamente indisponível/); assert.equal(await page.locator('[data-form="register"]').count(), 0); failRefresh = false;
@@ -212,6 +216,15 @@ function makeAccount(method = 'Pix', paid = 10000) {
   account = null; quote = { ...quote, allow_pix: false }; await page.goto(base); await page.locator('[data-form="register"]').waitFor();
   assert(await page.locator('input[value="CartaoPOS"]').isChecked()); assert.equal(await page.locator('input[value="Pix"],input[value="Cartao"]').count(), 0); assert(await page.locator('[name="amount"]').isDisabled());
   assert.match(await page.locator('.ie-physical-terms').textContent(), /Procure a secretaria/);
+  // Brand art contains no static price/lot; both follow the active server quote.
+  account = null; quote = { ...event, brand_preset: 'origens', cover_url: '/origens-cover.jpg', primary_color: '#075ea8', accent_color: '#62c5f4', background_color: '#f0f5fc', active_lot: 2 };
+  await page.goto(base); await page.locator('.ie-live-lot strong').waitFor(); assert.match(await page.locator('.ie-live-lot').textContent(), /Lote 2/); assert.match(await page.locator('.ie-live-lot').textContent(), /520,00/); assert.match(await page.locator('.ie-live-lot').textContent(), /8x/);
+  assert.equal(await page.locator('.ie-brand-cover img').getAttribute('src'), '/origens-cover.jpg'); assert.equal(await page.locator('.ie-brand-cover a').count(), 0);
+  assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+  if (artifacts) await page.screenshot({ path: path.join(artifacts, 'origens-registration-mobile.png'), fullPage: true });
+  await page.setViewportSize({ width: 1366, height: 1000 });
+  if (artifacts) await page.screenshot({ path: path.join(artifacts, 'origens-registration-desktop.png'), fullPage: true });
+  quote = { ...quote, active_lot: 3 }; await page.goto(base); await page.locator('.ie-live-lot strong').waitFor(); assert.match(await page.locator('.ie-live-lot').textContent(), /Lote 3/); assert.match(await page.locator('.ie-live-lot').textContent(), /550,00/); assert.match(await page.locator('.ie-live-lot').textContent(), /6x/);
   // Unknown dates keep registrations closed while the CPF consultation remains available.
   account = null; quote = { ...event, active_lot: null, open: false, event_date: '', notice: 'Prévia: defina a data do evento.' };
   await page.goto(base); await page.locator('.ie-notice').waitFor(); assert.equal(await page.locator('[data-form="register"]').count(), 0);

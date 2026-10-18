@@ -3,7 +3,7 @@
  * Plugin Name: Inscrição de Eventos
  * Plugin URI: https://github.com/paulommaeda/inscricao-eventos
  * Description: Eventos com identidade própria, lotes, PIX/cartão online no K8 e cartão físico com baixa manual.
- * Version: 1.5.0
+ * Version: 1.6.0
  * Requires at least: 6.4
  * Requires PHP: 8.1
  * Author: Paulo Maeda
@@ -12,10 +12,10 @@
  * Update URI: https://github.com/paulommaeda/inscricao-eventos
  */
 if (!defined('ABSPATH')) { exit; }
-define('IE_VERSION', '1.5.0');
+define('IE_VERSION', '1.6.0');
 define('IE_FILE', __FILE__);
 define('IE_DIR', __DIR__ . '/');
-foreach (['Domain', 'Security', 'Access', 'Store', 'Gateway', 'Manual', 'Payments', 'Registrations', 'Reports', 'Api', 'Dashboard', 'Admin', 'Plugin'] as $ie_class) {
+foreach (['Domain', 'Security', 'Access', 'Branding', 'Store', 'Gateway', 'Manual', 'Payments', 'Registrations', 'Reports', 'Api', 'DashboardLogin', 'RegistrationPanel', 'Dashboard', 'Admin', 'Plugin'] as $ie_class) {
     require_once IE_DIR . 'includes/' . $ie_class . '.php';
 }
 register_activation_hook(__FILE__, [\InscricaoEventos\Plugin::class, 'activate']);

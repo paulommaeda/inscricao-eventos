@@ -6,10 +6,12 @@ final class Dashboard
 {
     public static function boot(): void
     {
+        DashboardLogin::boot();
         add_shortcode('inscricao_eventos_dashboard', [self::class, 'shortcode']);
         add_shortcode('dashboard_evento', [self::class, 'shortcode']);
         add_action('rest_api_init', static function () {
             register_rest_route('inscricao-eventos/v1', '/dashboard', ['methods' => 'GET', 'permission_callback' => [self::class, 'permission'], 'callback' => [self::class, 'endpoint']]);
+            RegistrationPanel::routes();
         });
     }
     public static function permission()
@@ -29,14 +31,14 @@ final class Dashboard
     {
         if (!defined('DONOTCACHEPAGE')) { define('DONOTCACHEPAGE', true); }
         if (!headers_sent()) { nocache_headers(); }
-        if (!Access::canView()) {
-            $link = is_user_logged_in() ? '' : ' <a href="' . esc_url(wp_login_url(get_permalink())) . '">Entrar no WordPress</a>';
-            return '<div class="ie-dashboard-access"><p>Dashboard restrito a administradores e gerentes de eventos.' . $link . '</p></div>';
-        }
         $a = shortcode_atts(['evento' => '0', 'id' => '0'], $attributes);
-        wp_enqueue_style('ie-dashboard', plugins_url('assets/dashboard.css', IE_FILE), [], IE_VERSION);
-        wp_enqueue_script('ie-dashboard', plugins_url('assets/dashboard.js', IE_FILE), [], IE_VERSION, true);
-        $config = ['api' => rest_url('inscricao-eventos/v1/dashboard'), 'nonce' => wp_create_nonce('wp_rest'), 'exportUrl' => admin_url('admin-post.php'), 'exportNonce' => wp_create_nonce('ie_export'), 'eventsUrl' => admin_url('admin.php?page=ie-events')];
+        Branding::enqueue(); wp_enqueue_style('ie-dashboard', plugins_url('assets/dashboard.css', IE_FILE), ['ie-brand'], IE_VERSION);
+        $eventId = absint($a['evento'] ?: $a['id']);
+        if (Access::canManage() && function_exists('get_queried_object_id') && get_queried_object_id()) { update_option('ie_dashboard_page_id', (int) get_queried_object_id(), false); }
+        if (!Access::canView()) { return DashboardLogin::form($eventId); }
+        wp_enqueue_script('ie-registration-modal', plugins_url('assets/registration-modal.js', IE_FILE), [], IE_VERSION, true);
+        wp_enqueue_script('ie-dashboard', plugins_url('assets/dashboard.js', IE_FILE), ['ie-registration-modal', 'ie-brand'], IE_VERSION, true);
+        $config = ['api' => rest_url('inscricao-eventos/v1/dashboard'), 'registrationApi' => rest_url('inscricao-eventos/v1/dashboard/registration/'), 'nonce' => wp_create_nonce('wp_rest'), 'exportUrl' => admin_url('admin-post.php'), 'exportNonce' => wp_create_nonce('ie_export'), 'loginUrl' => get_permalink(), 'logoutUrl' => wp_logout_url(get_permalink())];
         wp_add_inline_script('ie-dashboard', 'window.IE_DASHBOARD=' . wp_json_encode($config, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';', 'before');
         return '<section class="ie-dashboard" data-event="' . absint($a['evento'] ?: $a['id']) . '" aria-label="Dashboard do evento"><div class="ied-loading" role="status">Carregando dashboard…</div><noscript>Ative o JavaScript para acompanhar as inscrições e o financeiro.</noscript></section>';
     }

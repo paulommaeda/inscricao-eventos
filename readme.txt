@@ -2,7 +2,7 @@
 Contributors: paulommaeda
 Requires at least: 6.4
 Requires PHP: 8.1
-Stable tag: 1.5.0
+Stable tag: 1.6.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -14,6 +14,15 @@ Use [inscricao_eventos evento="1"] em uma página. A ativação cria o modelo do
 Use [inscricao_eventos_dashboard evento="1"] para o dashboard privado da organização.
 
 == Changelog ==
+= 1.6.0 =
+* Login no próprio dashboard, com retorno direto após entrar, mensagem de erro na página e validação de acesso de administradores/gerentes.
+* Detalhes de inscrição em modal, com cadastro, financeiro, pagamentos K8, baixas e histórico sem sair da página.
+* Administradores podem editar, registrar/reverter/vincular baixas, sincronizar, conferir/cancelar transações e excluir/restaurar pelo modal; gerentes continuam somente consultando.
+* Identidade Origens em azul e preto, com capa sem QR Code e sem datas, lote ou parcelamento fixos. Lote, preço e condições vêm do evento.
+* Identidade aplicada ao modelo original do retiro; outros eventos mantêm sua personalização e podem selecionar o novo tema.
+* Proteção de login por nonce vinculado ao navegador e redirecionamento local; API privada verifica perfil, nonce, evento e conta de pagamentos.
+* Testes de login/retorno, modal, baixas, gerentes, visual móvel e troca dinâmica de lotes, preservando os contratos existentes.
+
 = 1.5.0 =
 * Opções independentes por evento para PIX, cartão online e cartão físico na maquininha.
 * Cartão físico conclui o cadastro e mostra orientação editável para procurar a secretaria, mantendo o saldo pendente até a baixa manual por administrador.
