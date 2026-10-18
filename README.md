@@ -13,7 +13,17 @@ Plugin reutilizável para inscrições com lotes, identidade visual própria, ca
 
 Requisitos: WordPress 6.4+, PHP 8.1+, OpenSSL e MySQL/MariaDB com InnoDB. Não depende de WooCommerce nem dos plugins K8 anteriores.
 
-## Retorno PIX com campos de vínculo ausentes (1.6.1)
+## PIX filho do checkout sem pedido/referência (1.6.2)
+
+O payload de criação observado no K8 mantém `ClienteDescricao` e a URL de confirmação, mas traz `NumeroPedido` e `Referencia` nulos no PIX criado pelo checkout. O plugin já envia ambos os campos ao endpoint de checkout; eles não estavam sendo propagados para a transação filha mostrada pelo banco. A ausência também aparece nas consultas/listagens dessa transação. O payload de criação, sozinho, não informa se houve pagamento: a confirmação continua dependendo do estado e do valor pago consultados na API.
+
+Na versão 1.6.2, a descrição de cada **nova tentativa** começa com sua referência exclusiva, antes do nome do evento/lote. O texto completo é guardado na coluna `bank_description` **antes** da emissão e enviado como `ClienteDescricao`. Quando a API K8 devolve esse mesmo texto, a identificação exclusiva permite vincular o PIX à cobrança, inclusive na descoberta por listagem, mesmo com os três campos usuais ausentes. CPF original, ID, conta/ambiente, método, valor e estado continuam obrigatórios. Todos os campos presentes devem concordar; descrição de outra tentativa não vale, mesmo com o mesmo CPF e valor. Dados recebidos do navegador/webhook não criam essa prova.
+
+O participante continua usando o checkout K8. Gerar o link não gera crédito; apenas uma resposta aprovada na consulta bancária pode dar baixa. O identificador guardado não muda após editar a inscrição/evento. Retornos repetidos e estornos conservam as regras de idempotência e substituição de baixa provisória. Se a gravação do identificador falhar, nenhuma emissão é enviada ao banco.
+
+**Cobranças antigas:** uma descrição anterior, contendo apenas evento/lote/número de inscrição, não identifica cada tentativa. A atualização não inventa esse vínculo nem altera a cobrança no K8. Quando o banco não informar outro vínculo nas consultas, confira o pagamento aprovado e registre **Dar baixa manual da transação K8**, vinculada à tentativa já existente. Não gere outro PIX para corrigir o retorno e não registre o mesmo recebimento novamente como baixa externa.
+
+## Recuperação de vínculo pelas consultas (1.6.1)
 
 Algumas respostas individuais do K8 trazem o PIX aprovado, CPF, meio e valor, mas omitem referência, número do pedido e checkout. O plugin passa a recuperar o vínculo em outra consulta autenticada: pesquisa a referência exata guardada no servidor e exige o mesmo ID; se o K8 não localizar a referência, pesquisa os filtros documentados `dataemissao` e `checkout` e exige uma correspondência exata do mesmo ID com o pedido/referência/checkout. O vínculo encontrado na listagem é preservado na conferência individual. O estado e o valor efetivamente creditado continuam vindo da consulta individual, não da listagem nem do callback.
 
@@ -34,6 +44,8 @@ Os botões **Consultar detalhes** e **Detalhes / editar** abrem um modal na pró
 ## Identidade Origens e capa dinâmica
 
 A atualização aplica a identidade azul e preta ao evento criado pelo modelo original do retiro. A versão 1.6.1 corrige também a cópia publicada **Fogo Santo - Origens** que ainda conserva a paleta verde padrão e o tema Personalizada: seleciona Origens e troca a capa antiga `origens.jpeg/jpg/png` pela arte incluída. A identificação usa nome e paleta, sem depender do ID do modelo, que pode ter sido excluído. Datas, lotes, formas de pagamento e inscrições não são alterados. Outros eventos e paletas já personalizadas são preservados; a correção não sobrescreve edições feitas depois da atualização.
+
+Na versão 1.6.2, quando o retiro Fogo Santo - Origens já está com o tema Origens selecionado, a capa incluída prevalece sobre a URL do cartaz antigo `origens.jpeg/jpg/png`, mesmo que a migração anterior já tenha ocorrido. Outras URLs de capa continuam personalizáveis. Isso também cobre uma seleção de tema salva antes da atualização, sem exigir que o administrador apague manualmente a imagem antiga.
 
 Em **Eventos e lotes → Editar → Identidade visual**, o botão **Aplicar capa e cores Origens** seleciona o tema, preenche a paleta azul e limpa a URL de capa personalizada. Clique em **Salvar evento** para aplicar à inscrição, ao dashboard e ao login. Essa ação resolve também o caso em que selecionar apenas o tema mantinha uma URL antiga sobrepondo a arte incluída. Cores, logotipo e imagem de capa continuam editáveis. Para outros eventos, escolha Origens ou Personalizada conforme necessário.
 

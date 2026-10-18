@@ -11,8 +11,15 @@ final class Branding
         foreach (['allow_pix', 'allow_card', 'allow_card_physical'] as $flag) { $event[$flag] = !empty($event[$flag]); }
         $event['brand_preset'] = ($event['brand_preset'] ?? '') === 'origens' ? 'origens' : 'custom';
         $event['cover_url'] = (string) ($event['hero_url'] ?? '');
-        if ($event['brand_preset'] === 'origens' && !$event['cover_url']) { $event['cover_url'] = plugins_url('assets/origens-cover.jpg', IE_FILE); }
+        if ($event['brand_preset'] === 'origens' && (!$event['cover_url'] || self::legacyRetreatCover($event))) { $event['cover_url'] = plugins_url('assets/origens-cover.jpg', IE_FILE); }
         return $event;
+    }
+    /** The old retreat poster includes fixed conditions/QR and must not cover its selected Origens theme. */
+    private static function legacyRetreatCover(array $event): bool
+    {
+        $name = preg_replace('/[\s\p{Pd}]+/u', ' ', strtolower(trim($event['name'] ?? '')));
+        $path = (string) wp_parse_url($event['hero_url'] ?? '', PHP_URL_PATH);
+        return $name === 'fogo santo origens' && preg_match('~/origens\.(?:jpe?g|png)$~i', $path) === 1;
     }
     public static function enqueue(): void { wp_enqueue_style('ie-brand', plugins_url('assets/brand.css', IE_FILE), [], IE_VERSION); wp_enqueue_script('ie-brand', plugins_url('assets/brand.js', IE_FILE), [], IE_VERSION, true); }
     public static function migrate(): void

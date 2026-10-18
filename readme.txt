@@ -2,7 +2,7 @@
 Contributors: paulommaeda
 Requires at least: 6.4
 Requires PHP: 8.1
-Stable tag: 1.6.1
+Stable tag: 1.6.2
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -14,6 +14,14 @@ Use [inscricao_eventos evento="1"] em uma página. A ativação cria o modelo do
 Use [inscricao_eventos_dashboard evento="1"] para o dashboard privado da organização.
 
 == Changelog ==
+= 1.6.2 =
+* Novas cobranças enviam uma identificação exclusiva da tentativa em ClienteDescricao, preservada pelo PIX filho do checkout K8 mesmo quando NumeroPedido e Referencia vêm nulos.
+* A identificação completa é guardada antes da emissão e conferida na API, junto com ID, CPF original, conta, meio, valor e estado; descrições antigas não recebem confiança retroativa.
+* Pagamentos antigos sem vínculo bancário continuam exigindo conferência/baixa manual da própria cobrança; nenhuma nova cobrança é emitida para tentar corrigir um retorno.
+* A capa Origens sem QR Code passa a prevalecer sobre o cartaz antigo origens.jpeg/jpg/png do retiro quando o tema já estiver selecionado, inclusive após migrações anteriores.
+* Cores personalizadas, outros eventos e URLs de capas diferentes continuam preservados.
+* Testes com retorno PIX sem os três vínculos, descoberta por descrição, duplicação, estorno, divergências e falha antes da emissão; tema salvo com URL antiga cobrindo a inscrição, o login e o dashboard.
+
 = 1.6.1 =
 * Conciliação de PIX cuja consulta individual omite referência, pedido e checkout: recupera o vínculo nas consultas autenticadas por referência/listagem e exige o mesmo ID, CPF, meio e valor.
 * Preserva o vínculo confirmado entre listagem e consulta individual, sem usar o estado da listagem ou do callback como aprovação.

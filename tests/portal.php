@@ -33,6 +33,13 @@ same(S::event($customCopy), $customBefore, 'Already customized retreat palette i
 same($branded['brand_preset'], 'origens', 'Initial retreat receives Origens preset'); same($branded['primary_color'], '#075ea8', 'Identity blue applied'); same(S::registration($rid), $before, 'Brand migration cannot change registration contract'); same(S::event($other)['brand_preset'], 'custom', 'Other event identity preserved');
 same([$branded['event_date'], $branded['registration_start'], $branded['registration_end']], [$e['event_date'], $e['registration_start'], $e['registration_end']], 'Poster dates never replace event dates');
 same(str_ends_with(B::present($branded)['cover_url'], '/assets/origens-cover.jpg'), true, 'Bundled clean banner used');
+// A previously selected theme may still keep the original poster URL. Rendering
+// must use the clean cover even if migration markers were already saved earlier.
+$poster = array_merge($e, B::ORIGENS, ['name' => 'Fogo Santo - Origens', 'brand_preset' => 'origens', 'hero_url' => 'https://event.test/uploads/origens.jpeg']);
+same(str_ends_with(B::present($poster)['cover_url'], '/assets/origens-cover.jpg'), true, 'Selected Origens theme cannot be covered by its legacy retreat poster');
+same(B::present(array_merge($poster, ['hero_url' => 'https://event.test/custom-cover.jpg']))['cover_url'], 'https://event.test/custom-cover.jpg', 'A custom cover remains available');
+same(B::present(array_merge($poster, ['name' => 'Outro evento']))['cover_url'], $poster['hero_url'], 'Poster override is specific to the requested retreat');
+same(B::present(array_merge($poster, ['brand_preset' => 'custom']))['cover_url'], $poster['hero_url'], 'Personalized theme still honors its chosen image');
 same(B::present(['allow_card' => '0', 'allow_pix' => '1'])['allow_card'], false, 'Database string zero cannot advertise online card'); same(B::present(['allow_card_physical' => '1'])['allow_card_physical'], true, 'Database string flag normalized for banner');
 S::update('events', ['primary_color' => '#123456'], ['id' => $eid]); B::migrate(); same(S::event($eid)['primary_color'], '#123456', 'Identity migration runs once and preserves later customization');
 S::update('events', ['brand_preset' => 'custom', 'primary_color' => '#123456', 'hero_url' => 'https://event.test/later.jpg'], ['id' => $publishedCopy]); B::migrate(); same(S::event($publishedCopy)['hero_url'], 'https://event.test/later.jpg', 'Repair also preserves customization after upgrading');

@@ -32,6 +32,8 @@ for ($i = 0; $i < 34; $i++) {
 if ($saved) { $wpdb->hydrate($saved['rows']); $GLOBALS['test_options'] = $saved['options']; $GLOBALS['test_transients'] = $saved['transients']; }
 if (!$saved) { update_option('ie_sample_created', 9999); update_option('ie_origens_branding_applied', 1); }
 InscricaoEventos\Branding::migrate();
+// Reproduce a saved Origens theme whose old poster URL survived the earlier upgrade.
+S::update('events', ['hero_url' => 'https://event.test/uploads/origens.jpeg'], ['id' => $eid]);
 if ($stateFile) register_shutdown_function(static function () use ($stateFile, $wpdb) { file_put_contents($stateFile, json_encode(['rows' => $wpdb->rows, 'options' => $GLOBALS['test_options'], 'transients' => $GLOBALS['test_transients']])); });
 if (($_COOKIE['ie_manual_fixture'] ?? '') === '1' && !array_filter($wpdb->rows['wp_ie_manuals'] ?? [], static fn($m) => $m['note'] === 'Comprovante privado da organização')) {
     S::insert('manuals', ['registration_id' => 3, 'payment_id' => 0, 'amount' => 10000, 'method' => 'Dinheiro', 'paid_on' => $today->format('Y-m-d'), 'note' => 'Comprovante privado da organização', 'request_key' => str_repeat('f', 64), 'actor_id' => 1, 'created_at' => current_time('mysql', true), 'reversed_at' => null, 'reversed_by' => 0, 'reverse_note' => '', 'resolved_at' => null, 'resolved_state' => '']);

@@ -96,6 +96,7 @@ final class Store
                 method varchar(10) NOT NULL,
                 max_installments int DEFAULT NULL,
                 cpf_snapshot text DEFAULT NULL,
+                bank_description varchar(100) NOT NULL DEFAULT '',
                 diagnostic_json longtext DEFAULT NULL,
                 checkout_id varchar(100) DEFAULT NULL,
                 checkout_url text NOT NULL,
@@ -174,7 +175,7 @@ final class Store
             $engine = $wpdb->get_row($wpdb->prepare('SHOW TABLE STATUS WHERE Name=%s', $table), ARRAY_A);
             if (strtolower($engine['Engine'] ?? '') !== 'innodb') { throw new \RuntimeException('O plugin precisa de tabelas InnoDB para proteger as operações financeiras.'); }
         }
-        foreach (['events' => ['allow_card_physical', 'physical_card_message', 'brand_preset'], 'registrations' => ['status', 'admin_note', 'updated_at', 'deleted_at'], 'payments' => ['max_installments', 'cpf_snapshot', 'diagnostic_json', 'remote_id_hint', 'webhook_at', 'webhook_error'], 'manuals' => ['registration_id', 'payment_id', 'remote_id', 'request_key', 'reversed_at', 'resolved_at'], 'transactions' => ['cancel_status', 'cancel_operation', 'cancel_requested_at', 'cancel_error', 'cancel_actor']] as $name => $required) {
+        foreach (['events' => ['allow_card_physical', 'physical_card_message', 'brand_preset'], 'registrations' => ['status', 'admin_note', 'updated_at', 'deleted_at'], 'payments' => ['max_installments', 'cpf_snapshot', 'bank_description', 'diagnostic_json', 'remote_id_hint', 'webhook_at', 'webhook_error'], 'manuals' => ['registration_id', 'payment_id', 'remote_id', 'request_key', 'reversed_at', 'resolved_at'], 'transactions' => ['cancel_status', 'cancel_operation', 'cancel_requested_at', 'cancel_error', 'cancel_actor']] as $name => $required) {
             $columns = $wpdb->get_col('SHOW COLUMNS FROM ' . self::table($name));
             if (!is_array($columns) || array_diff($required, $columns)) { throw new \RuntimeException('Não foi possível atualizar as colunas da tabela de ' . $name . '. Confira as permissões do banco.'); }
         }

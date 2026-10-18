@@ -117,12 +117,17 @@ final class Gateway
         }
         throw new \RuntimeException('Não foi possível renovar a autenticação K8.');
     }
+    /** Put the unique attempt reference first so the checkout's child PIX keeps a bank-side link. */
+    public static function description(array $payment, array $registration, array $event): string
+    {
+        return Domain::cut('IE ' . $payment['reference'] . ' | Inscricao #' . $registration['id'] . ' | ' . $event['name'] . ' / ' . $registration['lot_name'], 100);
+    }
     public static function payload(array $payment, array $registration, array $event, string $return, string $callback, string $cpf): array
     {
         if (!in_array($payment['method'], ['Pix', 'Cartao'], true)) { throw new \RuntimeException('Cartão físico não gera checkout K8. A confirmação deve ser feita por baixa manual.'); }
         $phone = preg_replace('/\D/', '', $registration['phone']);
         if (strlen($phone) > 11 && substr($phone, 0, 2) === '55') { $phone = substr($phone, 2); }
-        $payload = ['Valor' => (int) $payment['amount'] / 100, 'ClienteCPFCNPJ' => $cpf, 'ClienteNome' => Domain::cut($registration['name'], 100), 'ClienteEmail' => $registration['email'], 'ClienteDDD' => substr($phone, 0, 2), 'ClienteNumeroCelular' => substr($phone, 2), 'ClienteDescricao' => Domain::cut($event['name'] . ' / ' . $registration['lot_name'] . ' / Inscrição #' . $registration['id'], 100), 'ClienteIP' => Security::ip(), 'URLRetorno' => $return, 'URLConfirmacao' => $callback, 'NumeroPedido' => $payment['reference'], 'Referencia' => $payment['reference']];
+        $payload = ['Valor' => (int) $payment['amount'] / 100, 'ClienteCPFCNPJ' => $cpf, 'ClienteNome' => Domain::cut($registration['name'], 100), 'ClienteEmail' => $registration['email'], 'ClienteDDD' => substr($phone, 0, 2), 'ClienteNumeroCelular' => substr($phone, 2), 'ClienteDescricao' => ($payment['bank_description'] ?? '') ?: self::description($payment, $registration, $event), 'ClienteIP' => Security::ip(), 'URLRetorno' => $return, 'URLConfirmacao' => $callback, 'NumeroPedido' => $payment['reference'], 'Referencia' => $payment['reference']];
         if ($payment['method'] === 'Cartao') {
             // New attempts carry the server-calculated cap; legacy attempts keep their issued terms.
             $max = (int) ($payment['max_installments'] ?? Domain::installments($registration, $event)['max']);

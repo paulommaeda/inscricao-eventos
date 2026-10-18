@@ -83,6 +83,10 @@ final class Payments
             $return = add_query_arg(['ie_return' => 1, 'ie_event' => $event['id'], 'ie_payment' => $id], $event['public_page_id'] ? get_permalink((int) $event['public_page_id']) : home_url('/'));
             $callback = add_query_arg('key', self::callbackKey($payment), rest_url('inscricao-eventos/v1/webhook/' . $id));
             try {
+                // Freeze the exact, unique text BEFORE emission. Legacy attempts keep an empty
+                // snapshot: a non-unique old description must never be promoted into proof.
+                $payment['bank_description'] = Gateway::description($payment, $registration, $event);
+                Store::update('payments', ['bank_description' => $payment['bank_description']], ['id' => $id]);
                 $result = $gateway->request('/v2/CriaTransacaoCheckout', Gateway::payload($payment, $registration, $event, $return, $callback, Security::unseal($registration['cpf_encrypted'])));
                 $checkout = (string) ($result['Identificador'] ?? '');
                 if (!preg_match('/^[A-Za-z0-9-]{1,100}$/D', $checkout)) { throw new \RuntimeException('Identificador de checkout K8 ausente.'); }
@@ -207,6 +211,11 @@ final class Payments
         try { $amount = Domain::cents($data['Valor'] ?? ''); $add('Valor da transação', Domain::money((int) $p['amount']), Domain::money($amount), $amount === (int) $p['amount'] ? 'Confere' : 'Divergente'); }
         catch (\Throwable $e) { $add('Valor da transação', Domain::money((int) $p['amount']), '[ausente/inválido]', 'Divergente'); }
         $add('Estado', 'Confirmação pela API', $text($data['Estado'] ?? null), 'Informativo');
+        if (!empty($p['bank_description'])) {
+            $description = $data['ClienteDescricao'] ?? null;
+            $equal = is_string($description) && hash_equals($p['bank_description'], $description);
+            $add('Identificação exclusiva na descrição', $p['reference'], $equal ? 'Identificação exclusiva confere' : (empty($description) ? 'Não informada' : 'Identificação diferente'), $equal ? 'Confere' : 'Não confirmada');
+        }
         if ($source !== '') { $add('Vínculo confirmado pela API', 'Esta cobrança e o mesmo ID K8', $source, 'Confere'); }
         Store::update('payments', ['diagnostic_json' => wp_json_encode(['checked_at' => current_time('mysql', true), 'rows' => $rows])], ['id' => $p['id']]);
     }
@@ -304,6 +313,11 @@ final class Payments
             if (self::checkoutMatches($p, $data[$field])) { $matches = true; }
             elseif (!empty($p['checkout_id'])) { $problems[] = 'checkout diferente'; }
         }
+        if (!empty($p['bank_description']) && isset($data['ClienteDescricao']) && $data['ClienteDescricao'] !== '') {
+            if (!is_string($data['ClienteDescricao'])) { throw new \RuntimeException('Campo ClienteDescricao inválido na resposta K8.'); }
+            if (hash_equals($p['bank_description'], $data['ClienteDescricao'])) { $matches = true; }
+            else { $problems[] = 'identificação exclusiva na descrição diferente'; }
+        }
         return [$matches, array_values(array_unique($problems))];
     }
 
@@ -345,10 +359,10 @@ final class Payments
                 if ($expectedId !== null && $id !== Domain::remoteId($expectedId)) { continue; }
                 // A matching field cannot override a contradictory field or another participant.
                 self::identity($p, $r, $row, $id, false);
-                $ids[$id] = 'Listagem K8 (' . $filter . '): vínculo exato com pedido/referência/checkout';
+                $ids[$id] = 'Listagem K8 (' . $filter . '): identificação exata da cobrança';
             }
             $search[] = ['filter' => $filter, 'returned' => count($data['Transacoes']), 'matched' => count($ids)];
-            $rows[] = ['field' => 'Busca: ' . $filter, 'local' => 'Pedido/referência ' . $p['reference'] . ' ou checkout ' . ($p['checkout_id'] ?? ''), 'k8' => count($data['Transacoes']) . ' transações; ' . count($ids) . ' correspondências exatas', 'result' => $ids ? 'Encontrada' : 'Não localizada'];
+            $rows[] = ['field' => 'Busca: ' . $filter, 'local' => 'Pedido/referência ' . $p['reference'] . ' ou checkout ' . ($p['checkout_id'] ?? '') . (!empty($p['bank_description']) ? ' ou descrição exclusiva emitida' : ''), 'k8' => count($data['Transacoes']) . ' transações; ' . count($ids) . ' correspondências exatas', 'result' => $ids ? 'Encontrada' : 'Não localizada'];
             Store::update('payments', ['diagnostic_json' => wp_json_encode(['checked_at' => current_time('mysql', true), 'rows' => $rows, 'search' => $search])], ['id' => $p['id']]);
             if ($ids) { break; }
         }

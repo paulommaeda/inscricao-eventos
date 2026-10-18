@@ -158,5 +158,52 @@ failure(fn() => P::sync($p['id'], $id)); same(S::paid($alias['id']), 10000, 'A v
 $fake = registration(); $p = payment($fake);
 failure(fn() => P::applyVerified($p, $fake, remote($p, 'forged-provenance', array_merge($blankLink, ['source' => 'reference', 'bankLinked' => true, 'binding_source' => 'list'])), 'forged-provenance'));
 same(S::transactions($p['id']), [], 'A payload cannot supply private API provenance');
+
+// The production checkout copies ClienteDescricao to its child PIX but drops
+// order/reference/checkout IDs. Use the EXACT unique text frozen before emission.
+$newPix = registration(); queue(['Retorno' => 'OK', 'Identificador' => 'descriptor-checkout', 'URL' => 'https://pagamentos.meuk8.com.br/Checkout?id=descriptor-fixture']);
+$issued = P::create($newPix, '490'); $issuedPayment = S::payment($issued['payment_id']);
+$wire = G::decode(end($GLOBALS['http_calls'])[1]['body'], '1234567890abcdef');
+same($wire['NumeroPedido'], $issuedPayment['reference'], 'Plugin supplies order at the checkout boundary'); same($wire['Referencia'], $issuedPayment['reference'], 'Plugin supplies reference at the checkout boundary');
+same($wire['ClienteDescricao'], $issuedPayment['bank_description'], 'Unique bank description is frozen before emitting the checkout');
+same(str_starts_with($wire['ClienteDescricao'], 'IE ' . $issuedPayment['reference'] . ' | '), true, 'Unique attempt reference survives even a long event title');
+same(S::paid($newPix['id']), 0, 'Issuing a checkout and its description never credits payment');
+same(str_contains(json_encode(S::publicRegistration($newPix)), '"bank_description"'), false, 'Expected bank identity snapshot is never exposed as a participant-editable field');
+$child = remote($issuedPayment, 'descriptor-child-pix', array_merge($blankLink, ['ClienteDescricao' => $wire['ClienteDescricao'], 'Estado' => 'Pendente', 'ValorPago' => 0]));
+$callback = new WP_REST_Request([], ['key' => P::callbackKey($issuedPayment), 'ID_BknBank' => 'descriptor-child-pix'], ['payment_id' => $issuedPayment['id']], ['Estado' => 'Aprovada', 'ValorPago' => 490]);
+$calls = count($GLOBALS['http_calls']); queue($child); same(A::webhook($callback)->get_status(), 200, 'Callback finds the issued PIX by its bank-returned exclusive description');
+same(S::paid($newPix['id']), 0, 'Description linkage does not turn pending bank status into approval'); same(count($GLOBALS['http_calls']) - $calls, 1, 'Complete detail proof needs no empty reference/list searches');
+$child['Estado'] = 'Aprovada'; $child['ValorPago'] = 490; queue($child); same(A::webhook($callback)->get_status(), 200, 'Later child PIX approval reconciles despite every normal correlation being null');
+same(S::paid($newPix['id']), 49000, 'Bank-approved descriptor-linked PIX settles the registration');
+same(str_contains(S::payment($issuedPayment['id'])['diagnostic_json'], 'ClienteNome'), false, 'Descriptor diagnostic does not store raw response fields');
+queue($child); A::webhook($callback); same(S::paid($newPix['id']), 49000, 'Repeated descriptor-linked callback never doubles credit');
+$child['Estado'] = 'Estornado'; queue($child); A::webhook($callback); same(S::paid($newPix['id']), 0, 'Confirmed descriptor-linked refund restores the balance');
+queue(['Retorno' => 'OK', 'Identificador' => 'descriptor-checkout-second', 'URL' => 'https://pagamentos.meuk8.com.br/Checkout?id=descriptor-second-fixture']);
+$next = P::create($newPix, '490'); $nextPayment = S::payment($next['payment_id']);
+same($nextPayment['bank_description'] === $issuedPayment['bank_description'], false, 'Two attempts for the same CPF, method and amount have distinct bank descriptions');
+$calls = count($GLOBALS['http_calls']); queue(remote($nextPayment, 'descriptor-second-child', array_merge($blankLink, ['ClienteDescricao' => $issuedPayment['bank_description']])));
+failure(fn() => P::sync($nextPayment['id'], 'descriptor-second-child')); same(S::paid($newPix['id']), 0, 'A sibling attempt description cannot credit another payment'); same(count($GLOBALS['http_calls']) - $calls, 1, 'Conflicting exclusive description fails before any fallback');
+foreach ([['Referencia' => 'different-order'], ['NumeroPedido' => 'different-order'], ['CheckoutId' => 'other-checkout'], ['ClienteCPFCNPJ' => '11144477735'], ['Tipo' => 'Cartao'], ['Valor' => 489.99], ['ClienteDescricao' => ['malformed']]] as $bad) {
+    queue(remote($nextPayment, 'descriptor-second-child', array_merge($blankLink, ['ClienteDescricao' => $nextPayment['bank_description']], $bad)));
+    failure(fn() => P::sync($nextPayment['id'], 'descriptor-second-child')); same(S::paid($newPix['id']), 0, 'Exclusive description cannot override divergent identity/method/amount or malformed values');
+}
+// The identity of the issued payment is immutable if event/registration labels change.
+S::update('registrations', ['name' => 'Pessoa Renomeada', 'lot_name' => 'Lote renomeado'], ['id' => $newPix['id']]);
+queue(remote($nextPayment, 'descriptor-second-child', array_merge($blankLink, ['ClienteDescricao' => $nextPayment['bank_description']]))); P::sync($nextPayment['id']);
+same(S::paid($newPix['id']), 49000, 'Original description snapshot survives a later registration correction');
+same(S::payment($nextPayment['id'])['bank_description'], $nextPayment['bank_description'], 'Reconciliation cannot rewrite issued description');
+$legacyDescription = registration(); $p = payment($legacyDescription);
+failure(fn() => P::applyVerified($p, $legacyDescription, remote($p, 'legacy-text-is-not-proof', array_merge($blankLink, ['ClienteDescricao' => 'Retiro de teste / Lote 1 / Inscrição #' . $legacyDescription['id']])), 'legacy-text-is-not-proof'));
+same(S::transactions($p['id']), [], 'Legacy non-unique description is never retroactively trusted');
+failure(fn() => P::applyVerified($p, $legacyDescription, remote($p, 'unissued-descriptor', array_merge($blankLink, ['ClienteDescricao' => G::description($p, $legacyDescription, S::event($eid))])), 'unissued-descriptor'));
+same(S::transactions($p['id']), [], 'Even a text containing the reference is not proof without an issued immutable snapshot');
+$descriptionOnly = registration(); queue(['Retorno' => 'OK', 'Identificador' => 'descriptor-discovery', 'URL' => 'https://pagamentos.meuk8.com.br/Checkout?id=descriptor-discovery']);
+$created = P::create($descriptionOnly, '100'); $p = S::payment($created['payment_id']); $row = remote($p, 'descriptor-discovery-child', array_merge($blankLink, ['ClienteDescricao' => $p['bank_description']]));
+queue(['Retorno' => 'ERRO', 'DetalhesErro' => 'Referencia da Transação não localizada']); queue(['Retorno' => 'OK', 'Transacoes' => [$row]]); queue($row); P::sync($p['id']);
+same(S::paid($descriptionOnly['id']), 10000, 'Description proof also discovers the transaction when no callback/browser ID arrived');
+// A storage failure before snapshot persistence must prevent bank emission entirely.
+$storage = registration(); $calls = count($GLOBALS['http_calls']); $wpdb->failUpdate = 'wp_ie_payments'; $wpdb->failUpdateField = 'bank_description';
+failure(fn() => P::create($storage, '100')); same(count($GLOBALS['http_calls']), $calls, 'Failed snapshot persistence sends no bank request');
+same(S::payments($storage['id'])[0]['state'], 'review', 'Failed pre-emission write remains explicit review rather than a duplicate charge');
 same(count($GLOBALS['http_queue']), 0, 'All mocked responses consumed by intended calls');
 echo 'OK: ' . $checks . " production checkout/PIX return checks; all transport mocked, no live payments.\n";
