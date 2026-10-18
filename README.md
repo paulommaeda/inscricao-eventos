@@ -1,6 +1,6 @@
 # Inscrição de Eventos — WordPress + K8
 
-Plugin reutilizável para inscrições com lotes, identidade visual própria, cartão no checkout K8 e entrada/complementos por PIX. Código e atualizações em [paulommaeda/inscricao-eventos](https://github.com/paulommaeda/inscricao-eventos), branch `main`.
+Plugin reutilizável para inscrições com lotes, identidade visual própria, cartão online no checkout K8, cartão físico na maquininha e entrada/complementos por PIX. Código e atualizações em [paulommaeda/inscricao-eventos](https://github.com/paulommaeda/inscricao-eventos), branch `main`.
 
 ## Instalação
 
@@ -23,7 +23,25 @@ O modelo nasce como **rascunho**, pois a data exata do evento não foi informada
 | Lote 2 | 16/11/2026 a 31/12/2026 | R$ 520,00, a confirmar | até 8x |
 | Lote 3 | 01/01/2027 a 30/01/2027 | R$ 550,00 | até 6x |
 
-O cartão usa as modalidades à vista e parcelado sem juros do checkout K8. O evento pode aceitar apenas cartão, apenas PIX ou ambos. A entrada mínima do modelo é R$ 1,00, editável; não foi presumida uma entrada obrigatória maior.
+O cartão online usa as modalidades à vista e parcelado sem juros do checkout K8. Cada evento habilita independentemente PIX, cartão online e cartão físico. A entrada mínima PIX do modelo é R$ 1,00, editável; não foi presumida uma entrada obrigatória maior.
+
+## Cartão físico na maquininha (1.5.0)
+
+Em **Inscrições → Eventos e lotes → Editar evento → Pagamento**, selecione as formas disponíveis:
+
+- **PIX online:** entrada e complementos no checkout K8, com conciliação pelo banco.
+- **Cartão online:** pagamento no checkout K8, com o limite de parcelas vigente.
+- **Cartão físico:** inscrição pelo site e pagamento presencial na maquininha, confirmado por um administrador.
+
+Para operar sem cartão habilitado no K8, desmarque **Cartão online**, marque **Cartão físico** e mantenha **PIX online** marcado se desejar continuar recebendo PIX. Salve o evento. Os eventos existentes conservam suas opções até essa edição. A mensagem do cartão físico é editável por evento e inicialmente diz: “Procure a secretaria para finalizar a sua inscrição e validar seu pagamento.”
+
+Ao escolher cartão físico, o participante conclui o cadastro sem abrir o K8 e vê **Aguardando pagamento na secretaria**, o saldo integral e o prazo de quitação. A seleção não representa um pagamento. Consultar o CPF continua mostrando essa orientação até registrar os recebimentos. Também é possível escolher cartão físico para o saldo de uma inscrição PIX. Um evento somente com cartão físico funciona sem credenciais K8; se pagamentos online forem adicionados depois, a inscrição e as baixas existentes são preservadas.
+
+Após conferir o comprovante da maquininha, um administrador abre a inscrição, expande **Registrar recebimento fora do K8**, seleciona **Cartão físico (maquininha)** e informa valor, data e identificação/motivo do comprovante. Confirma e clica em **Registrar baixa manual**. Recebimentos parciais reduzem o saldo; o total recebido quita a inscrição. O histórico, o dashboard e o CSV distinguem cartão físico e créditos manuais. Gerentes continuam apenas consultando. A reversão conserva o histórico e exige administrador e motivo.
+
+Desabilitar cartão online bloqueia a emissão e a retomada do checkout pelo plugin, inclusive para o saldo, mas não cancela cobranças já emitidas no K8. Essas tentativas continuam disponíveis para conferência administrativa e conciliação. Confira uma tentativa anterior antes de receber novamente na maquininha. Um pagamento feito no K8 com retorno atrasado deve usar a baixa da própria cobrança K8; o recebimento na maquininha é uma baixa externa independente.
+
+Depois de atualizar, limpe o cache da página e confira as formas habilitadas em cada evento.
 
 ## Checkout e conciliação em produção (1.4.2)
 
@@ -38,7 +56,8 @@ Após atualizar, limpe o cache da página/otimizador e recarregue a página de i
 ## Fluxo do participante
 
 - **Inscrição:** nome, e-mail, telefone com DDD e CPF válido; escolha da forma de pagamento e aceite das condições.
-- **Cartão:** checkout K8 pelo valor completo na inscrição ou pelo saldo integral restante depois de pagamentos por PIX, se o cartão estiver habilitado no evento. O limite original do lote é guardado na inscrição e diminui a cada mês completo para novos checkouts. A aprovação confirma a inscrição inteira; as parcelas seguintes pertencem à relação com o emissor do cartão.
+- **Cartão online:** checkout K8 pelo valor completo na inscrição ou pelo saldo integral restante depois de pagamentos por PIX, se habilitado no evento. O limite original do lote é guardado na inscrição e diminui a cada mês completo para novos checkouts. A aprovação confirma a inscrição inteira; as parcelas seguintes pertencem à relação com o emissor do cartão.
+- **Cartão físico:** cadastro sem checkout, orientação para a secretaria e saldo pendente até a baixa manual do recebimento na maquininha por um administrador.
 - **PIX:** o participante escolhe a entrada, paga no checkout K8 e acompanha o saldo após a confirmação.
 - **Complementos:** em “Minha inscrição”, informa o CPF, consulta o saldo, escolhe quanto pagar por PIX ou seleciona **Quitar saldo no cartão**. O cartão paga o saldo completo, já descontando os créditos confirmados, com o limite de parcelas válido na data de emissão do checkout.
 - O lote, seu preço e o limite original de parcelas ficam guardados ao criar a inscrição. Mudanças posteriores não reajustam essa inscrição. Complementos continuam disponíveis depois do encerramento das inscrições, até o prazo de quitação.

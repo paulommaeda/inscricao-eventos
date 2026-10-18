@@ -23,6 +23,12 @@ final class Gateway
         $this->cache = 'ie_k8_token_' . hash('sha256', $this->base . $encoded);
     }
     public function scope(): string { return hash('sha256', $this->base . ':' . $this->credentials['id']); }
+    public static function offlineScope(): string { return Security::hash('physical-card-local-scope'); }
+    /** Physical-card registrations must work without online gateway credentials or authentication. */
+    public static function formScope(): string
+    {
+        try { return (new self())->scope(); } catch (\Throwable $e) { return self::offlineScope(); }
+    }
     private function transport(string $path, array $args): array
     {
         $r = wp_remote_request($this->base . $path, array_merge(['timeout' => 20, 'redirection' => 0, 'sslverify' => true, 'limit_response_size' => 1048576], $args));
@@ -113,6 +119,7 @@ final class Gateway
     }
     public static function payload(array $payment, array $registration, array $event, string $return, string $callback, string $cpf): array
     {
+        if (!in_array($payment['method'], ['Pix', 'Cartao'], true)) { throw new \RuntimeException('Cartão físico não gera checkout K8. A confirmação deve ser feita por baixa manual.'); }
         $phone = preg_replace('/\D/', '', $registration['phone']);
         if (strlen($phone) > 11 && substr($phone, 0, 2) === '55') { $phone = substr($phone, 2); }
         $payload = ['Valor' => (int) $payment['amount'] / 100, 'ClienteCPFCNPJ' => $cpf, 'ClienteNome' => Domain::cut($registration['name'], 100), 'ClienteEmail' => $registration['email'], 'ClienteDDD' => substr($phone, 0, 2), 'ClienteNumeroCelular' => substr($phone, 2), 'ClienteDescricao' => Domain::cut($event['name'] . ' / ' . $registration['lot_name'] . ' / Inscrição #' . $registration['id'], 100), 'ClienteIP' => Security::ip(), 'URLRetorno' => $return, 'URLConfirmacao' => $callback, 'NumeroPedido' => $payment['reference'], 'Referencia' => $payment['reference']];

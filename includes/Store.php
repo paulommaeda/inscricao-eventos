@@ -38,6 +38,8 @@ final class Store
                 timezone varchar(64) NOT NULL DEFAULT 'America/Sao_Paulo',
                 allow_pix tinyint NOT NULL DEFAULT 1,
                 allow_card tinyint NOT NULL DEFAULT 1,
+                allow_card_physical tinyint NOT NULL DEFAULT 0,
+                physical_card_message text DEFAULT NULL,
                 minimum_entry bigint NOT NULL DEFAULT 100,
                 logo_url text NOT NULL,
                 hero_url text NOT NULL,
@@ -171,7 +173,7 @@ final class Store
             $engine = $wpdb->get_row($wpdb->prepare('SHOW TABLE STATUS WHERE Name=%s', $table), ARRAY_A);
             if (strtolower($engine['Engine'] ?? '') !== 'innodb') { throw new \RuntimeException('O plugin precisa de tabelas InnoDB para proteger as operações financeiras.'); }
         }
-        foreach (['registrations' => ['status', 'admin_note', 'updated_at', 'deleted_at'], 'payments' => ['max_installments', 'cpf_snapshot', 'diagnostic_json', 'remote_id_hint', 'webhook_at', 'webhook_error'], 'manuals' => ['registration_id', 'payment_id', 'remote_id', 'request_key', 'reversed_at', 'resolved_at'], 'transactions' => ['cancel_status', 'cancel_operation', 'cancel_requested_at', 'cancel_error', 'cancel_actor']] as $name => $required) {
+        foreach (['events' => ['allow_card_physical', 'physical_card_message'], 'registrations' => ['status', 'admin_note', 'updated_at', 'deleted_at'], 'payments' => ['max_installments', 'cpf_snapshot', 'diagnostic_json', 'remote_id_hint', 'webhook_at', 'webhook_error'], 'manuals' => ['registration_id', 'payment_id', 'remote_id', 'request_key', 'reversed_at', 'resolved_at'], 'transactions' => ['cancel_status', 'cancel_operation', 'cancel_requested_at', 'cancel_error', 'cancel_actor']] as $name => $required) {
             $columns = $wpdb->get_col('SHOW COLUMNS FROM ' . self::table($name));
             if (!is_array($columns) || array_diff($required, $columns)) { throw new \RuntimeException('Não foi possível atualizar as colunas da tabela de ' . $name . '. Confira as permissões do banco.'); }
         }
@@ -198,7 +200,14 @@ final class Store
     }
     public static function byCPF(int $eventId, string $cpf, ?string $scope = null): ?array
     {
-        global $wpdb; return $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . self::table('registrations') . ' WHERE event_id=%d AND scope=%s AND cpf_hash=%s', $eventId, $scope ?? (new Gateway())->scope(), Security::hash('cpf:' . $cpf)), ARRAY_A) ?: null;
+        global $wpdb; $found = null;
+        foreach ($scope !== null ? [$scope] : array_unique([Gateway::formScope(), Gateway::offlineScope()]) as $candidate) {
+            $row = $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . self::table('registrations') . ' WHERE event_id=%d AND scope=%s AND cpf_hash=%s', $eventId, $candidate, Security::hash('cpf:' . $cpf)), ARRAY_A);
+            if (!empty($wpdb->last_error)) { throw new \RuntimeException('Não foi possível conferir a inscrição. Tente novamente.'); }
+            if ($row && $found && (int) $row['id'] !== (int) $found['id']) { throw new \RuntimeException('Há mais de um cadastro deste CPF. Procure a organização para conferir.'); }
+            if ($row) { $found = $row; }
+        }
+        return $found;
     }
     public static function payment(int $id): array
     {
@@ -257,18 +266,17 @@ final class Store
         $e = self::event((int) $r['event_id']); $today = Domain::today($e);
         $b = self::balance($r);
         $active = ($r['status'] ?? 'active') === 'active';
-        $card = Domain::installments($r, $e); $methods = [];
-        if ($e['allow_pix'] && $r['method'] === 'Pix') { $methods[] = 'Pix'; }
-        if ($e['allow_card']) { $methods[] = 'Cartao'; }
-        $payments = array_map(static function ($p) use ($active, $b) {
-            return ['id' => (int) $p['id'], 'amount' => (int) $p['amount'], 'credit' => (int) $p['credit'], 'method' => $p['method'], 'manual_credit' => (int) $p['manual_credit'], 'manual_settled' => Manual::settled($p), 'max_installments' => isset($p['max_installments']) ? (int) $p['max_installments'] : null, 'state' => $p['state'], 'created_at' => $p['created_at'], 'url' => $active && $p['state'] === 'pending' && !$p['manual_credit'] && (int) $p['amount'] <= $b['balance'] ? $p['checkout_url'] : '', 'error' => $p['state'] === 'review' && !Manual::settled($p) ? 'Pagamento em conferência. Procure a organização antes de tentar novamente.' : ''];
+        $card = Domain::installments($r, $e); $methods = Domain::methods($e, $r);
+        $payments = array_map(static function ($p) use ($active, $b, $e) {
+            $onlineEnabled = $p['method'] === 'Pix' ? !empty($e['allow_pix']) : !empty($e['allow_card']);
+            return ['id' => (int) $p['id'], 'amount' => (int) $p['amount'], 'credit' => (int) $p['credit'], 'method' => $p['method'], 'manual_credit' => (int) $p['manual_credit'], 'manual_settled' => Manual::settled($p), 'max_installments' => isset($p['max_installments']) ? (int) $p['max_installments'] : null, 'state' => $p['state'], 'created_at' => $p['created_at'], 'url' => $active && $onlineEnabled && $p['state'] === 'pending' && !$p['manual_credit'] && (int) $p['amount'] <= $b['balance'] ? $p['checkout_url'] : '', 'error' => $p['state'] === 'review' && !Manual::settled($p) ? 'Pagamento em conferência. Procure a organização antes de tentar novamente.' : ''];
         }, self::payments((int) $r['id']));
         $manuals = array_map(static fn($m) => ['id' => (int) $m['id'], 'payment_id' => (int) $m['payment_id'], 'amount' => (int) $m['amount'], 'method' => $m['method'], 'paid_on' => $m['paid_on'], 'status' => !empty($m['reversed_at']) ? 'reversed' : (!empty($m['resolved_at']) ? 'reconciled' : 'active')], self::manuals((int) $r['id']));
-        return array_merge($b, ['id' => (int) $r['id'], 'event_id' => (int) $r['event_id'], 'event_name' => $e['name'], 'name' => Domain::firstName($r['name']), 'lot' => $r['lot_name'], 'method' => $r['method'], 'max_installments' => (int) $r['max_installments'], 'card_installments' => $card, 'payment_methods' => $methods, 'deadline' => $e['payment_deadline'], 'message' => str_replace('{data}', Domain::dateBR($e['payment_deadline']), $e['payment_message']), 'registration_status' => $r['status'] ?? 'active', 'payments' => $payments, 'manual_payments' => $manuals, 'can_pay' => $active && $b['balance'] > 0 && $e['status'] === 'published' && !empty($e['payment_deadline']) && $today <= $e['payment_deadline'] && (bool) $methods]);
+        return array_merge($b, ['id' => (int) $r['id'], 'event_id' => (int) $r['event_id'], 'event_name' => $e['name'], 'name' => Domain::firstName($r['name']), 'lot' => $r['lot_name'], 'method' => $r['method'], 'max_installments' => (int) $r['max_installments'], 'card_installments' => $card, 'payment_methods' => $methods, 'physical_card_message' => Domain::physicalMessage($e), 'deadline' => $e['payment_deadline'], 'message' => str_replace('{data}', Domain::dateBR($e['payment_deadline']), $e['payment_message']), 'registration_status' => $r['status'] ?? 'active', 'payments' => $payments, 'manual_payments' => $manuals, 'can_pay' => $active && $b['balance'] > 0 && $e['status'] === 'published' && !empty($e['payment_deadline']) && $today <= $e['payment_deadline'] && (bool) $methods]);
     }
     public static function sample(): array
     {
-        return ['name' => 'Retiro Carnaval 2028', 'description' => 'Um tempo para descansar, fortalecer a fé e viver momentos especiais em comunidade.', 'status' => 'draft', 'registration_start' => '2026-10-17', 'registration_end' => '2027-01-30', 'event_date' => '', 'payment_deadline' => '', 'timezone' => 'America/Sao_Paulo', 'allow_pix' => 1, 'allow_card' => 1, 'minimum_entry' => '1,00', 'payment_message' => 'O saldo devedor deve ser quitado até o dia do evento: {data}.', 'lots' => [
+        return ['name' => 'Retiro Carnaval 2028', 'description' => 'Um tempo para descansar, fortalecer a fé e viver momentos especiais em comunidade.', 'status' => 'draft', 'registration_start' => '2026-10-17', 'registration_end' => '2027-01-30', 'event_date' => '', 'payment_deadline' => '', 'timezone' => 'America/Sao_Paulo', 'allow_pix' => 1, 'allow_card' => 1, 'allow_card_physical' => 0, 'physical_card_message' => Domain::PHYSICAL_MESSAGE, 'minimum_entry' => '1,00', 'payment_message' => 'O saldo devedor deve ser quitado até o dia do evento: {data}.', 'lots' => [
             ['name' => 'Lote 1', 'starts_on' => '2026-10-17', 'ends_on' => '2026-11-15', 'price' => '490,00', 'max_installments' => 10, 'note' => ''],
             ['name' => 'Lote 2', 'starts_on' => '2026-11-16', 'ends_on' => '2026-12-31', 'price' => '520,00', 'max_installments' => 8, 'note' => 'Valor a confirmar'],
             ['name' => 'Lote 3', 'starts_on' => '2027-01-01', 'ends_on' => '2027-01-30', 'price' => '550,00', 'max_installments' => 6, 'note' => ''],
@@ -287,8 +295,8 @@ final class Store
         if ($start > $end || ($date && $end > $date) || ($deadline && ($deadline < $end || ($date && $deadline > $date)))) { throw new \RuntimeException('Confira a ordem das datas: início, encerramento, quitação e evento.'); }
         $tz = (string) ($input['timezone'] ?? 'America/Sao_Paulo');
         if (!in_array($tz, \DateTimeZone::listIdentifiers(), true)) { throw new \RuntimeException('Fuso horário inválido.'); }
-        $pix = empty($input['allow_pix']) ? 0 : 1; $card = empty($input['allow_card']) ? 0 : 1;
-        if (!$pix && !$card) { throw new \RuntimeException('Habilite PIX ou cartão para o evento.'); }
+        $pix = empty($input['allow_pix']) ? 0 : 1; $card = empty($input['allow_card']) ? 0 : 1; $physical = empty($input['allow_card_physical']) ? 0 : 1;
+        if (!$pix && !$card && !$physical) { throw new \RuntimeException('Habilite PIX, cartão online ou cartão físico para o evento.'); }
         $lots = []; $rows = $input['lots'] ?? [];
         if (!is_array($rows) || count($rows) > 100) { throw new \RuntimeException('Lotes inválidos.'); }
         foreach ($rows as $lot) {
@@ -304,6 +312,7 @@ final class Store
         $minimum = Domain::cents($input['minimum_entry'] ?? '1');
         if ($minimum < 1 || $minimum > min(array_column($lots, 'price'))) { throw new \RuntimeException('A entrada mínima deve ser positiva e não pode exceder o menor lote.'); }
         $fields = ['name' => $name, 'description' => wp_kses_post($input['description'] ?? ''), 'location' => Domain::cut(sanitize_text_field($input['location'] ?? ''), 255), 'status' => $status, 'event_date' => $date, 'registration_start' => $start, 'registration_end' => $end, 'payment_deadline' => $deadline, 'timezone' => $tz, 'allow_pix' => $pix, 'allow_card' => $card, 'minimum_entry' => $minimum, 'logo_url' => esc_url_raw($input['logo_url'] ?? '', ['https', 'http']), 'hero_url' => esc_url_raw($input['hero_url'] ?? '', ['https', 'http']), 'terms' => wp_kses_post($input['terms'] ?? ''), 'privacy_url' => esc_url_raw($input['privacy_url'] ?? '', ['https', 'http']), 'payment_message' => sanitize_textarea_field($input['payment_message'] ?? '') ?: 'O saldo devedor deve ser quitado até o dia do evento: {data}.', 'public_page_id' => absint($input['public_page_id'] ?? 0), 'updated_at' => current_time('mysql', true)];
+        $fields['allow_card_physical'] = $physical; $fields['physical_card_message'] = Domain::cut(sanitize_textarea_field($input['physical_card_message'] ?? ''), 1000) ?: Domain::PHYSICAL_MESSAGE;
         foreach (['primary_color' => '#215c4a', 'accent_color' => '#d2a45c', 'background_color' => '#f6f5f0'] as $key => $default) { $fields[$key] = sanitize_hex_color($input[$key] ?? '') ?: $default; }
         $lock = self::lock('event:' . $id);
         try {

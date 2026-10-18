@@ -17,7 +17,7 @@ $scope = (new G())->scope();
 $eid = S::insert('events', array_merge(S::sample(), ['name' => 'Evento de teste', 'status' => 'published', 'event_date' => '2028-03-01', 'payment_deadline' => '2028-02-29']));
 $eid2 = S::insert('events', array_merge(S::sample(), ['name' => 'Outro evento', 'status' => 'published']));
 S::insert('lots', ['event_id' => $eid, 'name' => 'Lote renomeado', 'starts_on' => '2026-10-17', 'ends_on' => '2027-01-30', 'price' => 49000, 'max_installments' => 10]);
-S::insert('lots', ['event_id' => $eid2, 'name' => 'Lote de outro evento']);
+S::insert('lots', ['event_id' => $eid2, 'name' => 'Lote de outro evento', 'starts_on' => '2026-10-17', 'ends_on' => '2027-01-30', 'price' => 49000, 'max_installments' => 10]);
 function participant($name, $total, $method = 'Pix', $status = 'active', $otherScope = false, $otherEvent = false, $created = '2026-10-14 12:00:00', $lot = 'Lote original'): int {
     global $scope, $eid, $eid2;
     return S::insert('registrations', ['event_id' => $otherEvent ? $eid2 : $eid, 'scope' => $otherScope ? 'other-account' : $scope, 'lot_id' => 90, 'lot_name' => $lot, 'total' => $total, 'max_installments' => 10, 'method' => $method, 'status' => $status, 'name' => $name, 'email' => strtolower($name) . '@example.test', 'phone' => '41999999999', 'cpf_hash' => C::hash('cpf:' . ($name === 'Ana' ? '52998224725' : $name)), 'cpf_encrypted' => C::seal('52998224725'), 'terms_snapshot' => 'Teste', 'terms_accepted_at' => $created, 'created_at' => $created]);

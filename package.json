@@ -1,6 +1,6 @@
 {
   "name": "inscricao-eventos",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "private": true,
   "scripts": { "test": "node tests/browser.cjs && node tests/browser-admin.cjs && node tests/browser-dashboard.cjs && node tests/browser-k8-manual.cjs" },
   "devDependencies": { "playwright": "^1.58.0" }

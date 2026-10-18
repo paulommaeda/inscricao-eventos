@@ -22,10 +22,10 @@ final class Registrations
             $status = (string) ($input['status'] ?? 'active');
             if (!in_array($status, ['active', 'cancelled'], true)) { throw new \RuntimeException('Situação da inscrição inválida.'); }
             $method = (string) ($input['method'] ?? $r['method']); $e = Store::event((int) $r['event_id']);
-            if (!in_array($method, ['Pix', 'Cartao'], true)) { throw new \RuntimeException('Forma de pagamento inválida.'); }
+            if (!in_array($method, ['Pix', 'Cartao', Domain::PHYSICAL_CARD], true)) { throw new \RuntimeException('Forma de pagamento inválida.'); }
             $payments = Store::payments($id);
             if ($method !== $r['method']) {
-                if (($method === 'Pix' && !$e['allow_pix']) || ($method === 'Cartao' && !$e['allow_card'])) { throw new \RuntimeException('Esta forma de pagamento está desabilitada no evento.'); }
+                if (!in_array($method, Domain::methods($e), true)) { throw new \RuntimeException('Esta forma de pagamento está desabilitada no evento.'); }
                 foreach ($payments as $p) { if (in_array($p['state'], ['creating', 'pending', 'review', 'canceling'], true)) { throw new \RuntimeException('Conclua ou cancele a tentativa em andamento antes de trocar a forma de pagamento.'); } }
             }
             $fields = ['name' => $name, 'email' => $email, 'phone' => $phone, 'cpf_hash' => Security::hash('cpf:' . $cpf), 'cpf_encrypted' => Security::seal($cpf), 'method' => $method, 'status' => $status, 'admin_note' => Domain::cut(sanitize_textarea_field($input['admin_note'] ?? ''), 2000), 'updated_at' => current_time('mysql', true)];

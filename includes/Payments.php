@@ -9,7 +9,8 @@ final class Payments
         $eventId = absint($input['event_id'] ?? 0);
         $cpf = Domain::cpf((string) ($input['cpf'] ?? ''));
         Security::limit('register-ip:' . Security::ip(), 15, 900);
-        $scope = (new Gateway())->scope();
+        $method = (string) ($input['method'] ?? '');
+        $scope = $method === Domain::PHYSICAL_CARD ? Gateway::formScope() : (new Gateway())->scope();
         $lock = Store::lock('event:' . $eventId);
         try {
             $event = Store::event($eventId);
@@ -19,13 +20,13 @@ final class Payments
             $existing = Store::byCPF($eventId, $cpf);
             if ($existing) { throw new \RuntimeException(($existing['status'] ?? 'active') === 'deleted' ? 'Este CPF possui inscrição na lixeira. Solicite a restauração à organização.' : 'Este CPF já possui inscrição neste evento. Use a opção Minha inscrição.'); }
             $method = (string) ($input['method'] ?? '');
-            if (!in_array($method, ['Pix', 'Cartao'], true) || ($method === 'Pix' && !$event['allow_pix']) || ($method === 'Cartao' && !$event['allow_card'])) { throw new \RuntimeException('Forma de pagamento indisponível para este evento.'); }
+            if (!in_array($method, Domain::methods($event), true)) { throw new \RuntimeException('Forma de pagamento indisponível para este evento.'); }
             $name = trim(sanitize_text_field($input['name'] ?? ''));
             $email = strtolower(trim((string) ($input['email'] ?? '')));
             $phone = preg_replace('/\D/', '', (string) ($input['phone'] ?? ''));
             if (strlen($name) < 3 || strlen($name) > 200 || !is_email($email) || strlen($email) > 254 || !preg_match('/^\d{10,15}$/D', $phone)) { throw new \RuntimeException('Confira nome, e-mail e telefone com DDD.'); }
             if (($input['accepted_terms'] ?? false) !== true) { throw new \RuntimeException('Leia e aceite as condições de inscrição.'); }
-            $id = Store::insert('registrations', ['event_id' => $eventId, 'scope' => $scope, 'lot_id' => $lot['id'], 'lot_name' => $lot['name'], 'total' => $lot['price'], 'max_installments' => $lot['max_installments'], 'method' => $method, 'name' => $name, 'email' => $email, 'phone' => $phone, 'cpf_hash' => Security::hash('cpf:' . $cpf), 'cpf_encrypted' => Security::seal($cpf), 'terms_snapshot' => $event['terms'] . "\n" . str_replace('{data}', Domain::dateBR($event['payment_deadline']), $event['payment_message']), 'terms_accepted_at' => current_time('mysql', true), 'created_at' => current_time('mysql', true)]);
+            $id = Store::insert('registrations', ['event_id' => $eventId, 'scope' => $scope, 'lot_id' => $lot['id'], 'lot_name' => $lot['name'], 'total' => $lot['price'], 'max_installments' => $lot['max_installments'], 'method' => $method, 'name' => $name, 'email' => $email, 'phone' => $phone, 'cpf_hash' => Security::hash('cpf:' . $cpf), 'cpf_encrypted' => Security::seal($cpf), 'terms_snapshot' => $event['terms'] . "\n" . str_replace('{data}', Domain::dateBR($event['payment_deadline']), $event['payment_message']) . ($method === Domain::PHYSICAL_CARD ? "\n" . Domain::physicalMessage($event) : ''), 'terms_accepted_at' => current_time('mysql', true), 'created_at' => current_time('mysql', true)]);
             Security::session($id);
             return Store::publicRegistration(Store::registration($id));
         } finally { Store::unlock($lock); }
@@ -38,14 +39,17 @@ final class Payments
             $registration = Store::registration((int) $registration['id']);
             if (($registration['status'] ?? 'active') !== 'active') { throw new \RuntimeException('Esta inscrição está cancelada ou na lixeira. Procure a organização.'); }
             $event = Store::event((int) $registration['event_id']);
-            $gateway = new Gateway();
-            if (!hash_equals($registration['scope'], $gateway->scope())) { throw new \RuntimeException('A inscrição pertence a outra conta ou ambiente K8. Procure a organização.'); }
+            if (!hash_equals($registration['scope'], Gateway::formScope()) && !hash_equals($registration['scope'], Gateway::offlineScope())) { throw new \RuntimeException('A inscrição pertence a outra conta ou ambiente K8. Procure a organização.'); }
             if ($event['status'] !== 'published' || !$event['payment_deadline'] || Domain::today($event) > $event['payment_deadline']) { throw new \RuntimeException('O prazo para novos pagamentos deste evento terminou. Procure a organização.'); }
             $method = $selectedMethod ?? $registration['method'];
-            if (!in_array($method, ['Pix', 'Cartao'], true)) { throw new \RuntimeException('Forma de pagamento inválida.'); }
-            if (($method === 'Pix' && (!$event['allow_pix'] || $registration['method'] !== 'Pix')) || ($method === 'Cartao' && !$event['allow_card'])) { throw new \RuntimeException('Esta forma de pagamento foi desabilitada. Procure a organização.'); }
+            if (!in_array($method, ['Pix', 'Cartao', Domain::PHYSICAL_CARD], true)) { throw new \RuntimeException('Forma de pagamento inválida.'); }
+            if (!in_array($method, Domain::methods($event, $registration), true)) { throw new \RuntimeException('Esta forma de pagamento foi desabilitada. Procure a organização.'); }
             $balance = Store::balance($registration);
             if (!$balance['balance']) { throw new \RuntimeException('Sua inscrição já está quitada.'); }
+            if ($method === Domain::PHYSICAL_CARD) { return ['physical_card' => true, 'message' => Domain::physicalMessage($event), 'registration' => Store::publicRegistration($registration)]; }
+            $gateway = new Gateway();
+            $local = hash_equals($registration['scope'], Gateway::offlineScope());
+            if (!$local && !hash_equals($registration['scope'], $gateway->scope())) { throw new \RuntimeException('A inscrição pertence a outra conta ou ambiente K8. Procure a organização.'); }
             $cents = Domain::cents($amount);
             if ($cents < 1 || $cents > $balance['balance']) { throw new \RuntimeException('O pagamento deve ser positivo e não pode exceder o saldo devedor.'); }
             if ($balance['paid'] === 0 && $method === 'Pix' && $cents < min((int) $event['minimum_entry'], $balance['balance'])) { throw new \RuntimeException('A entrada mínima é ' . Domain::money((int) $event['minimum_entry']) . '.'); }
@@ -61,6 +65,15 @@ final class Payments
             $settings = (array) get_option('ie_settings', []);
             if (($settings['environment'] ?? 'sandbox') === 'production' && wp_parse_url(home_url('/'), PHP_URL_SCHEME) !== 'https') { throw new \RuntimeException('A organização precisa habilitar HTTPS antes de receber pagamentos.'); }
             $gateway->authenticate(); // Avoid reserving a payment with invalid credentials.
+            if ($local) {
+                if (Store::payments((int) $registration['id']) || Store::byCPF((int) $registration['event_id'], Security::unseal($registration['cpf_encrypted']), $gateway->scope())) { throw new \RuntimeException('Procure a organização para conferir o vínculo de pagamentos desta inscrição.'); }
+                Store::begin();
+                try {
+                    Store::update('registrations', ['scope' => $gateway->scope()], ['id' => $registration['id']]);
+                    Store::audit((int) $registration['id'], 'online_scope', 'Inscrição presencial vinculada à conta K8 para emitir seu primeiro pagamento online. Recebimentos manuais preservados.');
+                    Store::commit(); $registration['scope'] = $gateway->scope();
+                } catch (\Throwable $e) { Store::rollback(); throw $e; }
+            }
             $reference = 'IE' . bin2hex(random_bytes(9));
             $id = Store::insert('payments', ['registration_id' => $registration['id'], 'reference' => $reference, 'scope' => $gateway->scope(), 'amount' => $cents, 'method' => $method, 'max_installments' => $installments, 'cpf_snapshot' => $registration['cpf_encrypted'], 'checkout_url' => '', 'state' => 'creating', 'last_error' => '', 'operator_note' => '', 'created_at' => current_time('mysql', true)]);
             $payment = Store::payment($id);

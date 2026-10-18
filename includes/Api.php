@@ -30,6 +30,7 @@ final class Api
             $lots = Store::lots((int) $e['id']); $today = Domain::today($e); $lot = Domain::quote($e, $lots, $today);
             $info = array_intersect_key($e, array_flip(['name', 'description', 'location', 'event_date', 'registration_start', 'registration_end', 'payment_deadline', 'logo_url', 'hero_url', 'primary_color', 'accent_color', 'background_color', 'terms', 'privacy_url', 'payment_message', 'timezone']));
             $info['id'] = (int) $e['id']; $info['minimum_entry'] = (int) $e['minimum_entry']; $info['allow_pix'] = (bool) $e['allow_pix']; $info['allow_card'] = (bool) $e['allow_card'];
+            $info['allow_card_physical'] = !empty($e['allow_card_physical']); $info['physical_card_message'] = Domain::physicalMessage($e);
             $info['lots'] = array_map(static fn($l) => ['id' => (int) $l['id'], 'name' => $l['name'], 'starts_on' => $l['starts_on'], 'ends_on' => $l['ends_on'], 'price' => (int) $l['price'], 'max_installments' => (int) $l['max_installments'], 'note' => $l['note']], $lots);
             $info['active_lot'] = $lot ? (int) $lot['id'] : null; $info['open'] = $lot !== null;
             $info['notice'] = $e['status'] === 'draft' ? 'Prévia: defina a data do evento e publique nas configurações.' : ($today < $e['registration_start'] ? 'As inscrições começam em ' . Domain::dateBR($e['registration_start']) . '.' : (!$lot ? 'Novas inscrições encerradas ou indisponíveis. Quem já se inscreveu pode consultar o saldo.' : ''));
@@ -50,7 +51,7 @@ final class Api
         }
         if ($action === 'logout') { Security::logout(); return ['ok' => true]; }
         $r = Security::registration();
-        if (!hash_equals($r['scope'], (new Gateway())->scope())) { throw new \RuntimeException('O ambiente de pagamentos mudou. Consulte novamente sua inscrição.'); }
+        if (!hash_equals($r['scope'], Gateway::formScope()) && !hash_equals($r['scope'], Gateway::offlineScope())) { throw new \RuntimeException('O ambiente de pagamentos mudou. Consulte novamente sua inscrição.'); }
         if ($action === 'payment') {
             Security::limit('pay:' . $r['id'], 10, 300);
             if (isset($input['method']) && !is_string($input['method'])) { throw new \RuntimeException('Forma de pagamento inválida.'); }

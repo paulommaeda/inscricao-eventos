@@ -21,7 +21,8 @@ let account = null, failPayment = false, failRefresh = false, retryReturn = fals
 let checkoutURL = 'https://sandbox.meuk8.com.br/PagamentosUI/checkout?id=test-only';
 function makeAccount(method = 'Pix', paid = 10000) {
   return { id: 1, event_id: 1, event_name: event.name, name: 'João', lot: 'Lote 1', method, max_installments: 10,
-    payment_methods: method === 'Pix' ? ['Pix', 'Cartao'] : ['Cartao'], card_installments: { base: 10, max: paid ? 7 : 10, months: paid ? 3 : 0, next_reduction: '2027-02-17' },
+    payment_methods: [...(quote.allow_pix && ['Pix', 'CartaoPOS'].includes(method) ? ['Pix'] : []), ...(quote.allow_card ? ['Cartao'] : []), ...(quote.allow_card_physical ? ['CartaoPOS'] : [])], physical_card_message: quote.physical_card_message,
+    card_installments: { base: 10, max: paid ? 7 : 10, months: paid ? 3 : 0, next_reduction: '2027-02-17' },
     total: 49000, paid, balance: 49000 - paid, overpaid: 0, status: paid === 49000 ? 'paid' : 'partial',
     deadline: event.payment_deadline, message: event.payment_message.replace('{data}', '29/02/2028'), can_pay: paid < 49000,
     payments: paid ? [{ id: 1, amount: paid, credit: paid, method, state: 'paid', created_at: '2026-10-20 12:00:00', url: '' }] : [] };
@@ -41,7 +42,8 @@ function makeAccount(method = 'Pix', paid = 10000) {
         case '/api/lookup': account = makeAccount(); data = account; break;
         case '/api/register': account = makeAccount(input.method, 0); data = account; break;
         case '/api/payment':
-          if (failPayment) { account.payments = [{ id: 4, amount: 10000, credit: 0, method: 'Pix', state: 'review', created_at: '2026-10-20 12:00:00', url: '' }]; status = 400; data = { message: 'Pagamento em conferência.' }; }
+          if (input.method === 'CartaoPOS') data = { physical_card: true, message: quote.physical_card_message, registration: account };
+          else if (failPayment) { account.payments = [{ id: 4, amount: 10000, credit: 0, method: 'Pix', state: 'review', created_at: '2026-10-20 12:00:00', url: '' }]; status = 400; data = { message: 'Pagamento em conferência.' }; }
           else data = { payment_id: 3, url: checkoutURL };
           break;
         case '/api/refresh': if (failRefresh) { status = 503; data = { message: 'Conciliação temporariamente indisponível.' }; } else data = retryReturn ? { ...account, return_retry: true } : account; break;
@@ -179,11 +181,42 @@ function makeAccount(method = 'Pix', paid = 10000) {
   account.payments[0].manual_settled = false; account.payments[0].manual_credit = 5000;
   await page.locator('[data-action="refresh"]').click(); await page.waitForFunction(() => !document.querySelector('[data-form="pay"]'));
   assert.equal(await page.locator('[data-form="pay"]').count(), 0);
+  // Physical card keeps registration pending, gives the secretaria instruction and never opens K8.
+  failPayment = false; account = null; quote = { ...event, allow_card: false, allow_card_physical: true, physical_card_message: 'Procure a secretaria para finalizar a sua inscrição e validar seu pagamento.' };
+  await page.goto(base); await page.locator('[data-form="register"]').waitFor();
+  assert.equal(await page.locator('input[value="Cartao"]').count(), 0); assert.equal(await page.locator('input[value="Pix"]').count(), 1);
+  await page.locator('input[value="CartaoPOS"]').check(); assert(await page.locator('.ie-entry').isHidden()); assert(await page.locator('[name="amount"]').isDisabled());
+  assert.equal(await page.locator('.ie-physical-terms').textContent(), quote.physical_card_message);
+  await page.locator('input[name="name"]').fill('Pessoa Maquininha'); await page.locator('input[name="email"]').fill('pessoa@example.test');
+  await page.locator('input[name="phone"]').fill('41999999999'); await page.locator('input[name="cpf"]').fill('52998224725'); await page.locator('input[name="accepted"]').check();
+  await page.getByRole('button', { name: 'Concluir inscrição' }).click(); await page.locator('.ie-secretaria').waitFor();
+  assert.equal(calls.findLast(c => c.route === '/api/register').input.method, 'CartaoPOS'); assert.equal(calls.findLast(c => c.route === '/api/payment').input.method, 'CartaoPOS');
+  assert.equal(page.url(), base + '/'); assert.equal(account.paid, 0); assert.deepEqual(account.payments, []); assert.equal(await page.locator('.ie-success,.ie-checkout').count(), 0);
+  assert.match(await page.locator('.ie-secretaria').textContent(), /Aguardando pagamento na secretaria/); assert.match(await page.locator('.ie-secretaria').textContent(), /validar seu pagamento/); assert.match(await page.locator('.ie-balance-main').textContent(), /490/);
+  assert.match(await page.locator('.ie-deadline').first().textContent(), /quitado até/);
+  assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+  if (artifacts) await page.screenshot({ path: path.join(artifacts, 'physical-card-mobile.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Escolher outra forma de pagamento' }).click(); await page.locator('input[value="Pix"]').check();
+  assert(await page.locator('.ie-entry').isVisible()); assert.equal(await page.locator('input[value="Cartao"]').count(), 0);
+  await page.goto(base); await page.locator('.ie-secretaria').waitFor();
+  // The administrator's receipt is the only source of POS settlement shown to the participant.
+  account = makeAccount('CartaoPOS', 49000); account.payments = []; account.gateway_paid = 0; account.manual_paid = 49000;
+  account.manual_payments = [{ id: 1, amount: 49000, method: 'CartaoPOS', paid_on: '2026-10-20', status: 'active' }];
+  await page.locator('[data-action="refresh"]').click(); await page.locator('.ie-success').waitFor();
+  assert.match(await page.locator('.ie-history').textContent(), /Cartão físico \(maquininha\)/); assert.equal(await page.getByRole('button', { name: /Registrar baixa|Reverter baixa/ }).count(), 0);
+  // An old online choice now displays the physical instruction; hidden checkout does not get recreated.
+  account = makeAccount('Cartao', 0); account.payments = [{ id: 9, amount: 49000, credit: 0, method: 'Cartao', state: 'review', created_at: '2026-10-20 12:00:00', url: '' }];
+  const callsBeforePhysical = calls.filter(c => c.route === '/api/payment').length;
+  await page.goto(base); await page.locator('.ie-secretaria').waitFor(); assert.equal(await page.locator('.ie-account a[href*="meuk8"]').count(), 0); assert.equal(calls.filter(c => c.route === '/api/payment').length, callsBeforePhysical);
+  // A physical-only event defaults to POS and needs no PIX amount.
+  account = null; quote = { ...quote, allow_pix: false }; await page.goto(base); await page.locator('[data-form="register"]').waitFor();
+  assert(await page.locator('input[value="CartaoPOS"]').isChecked()); assert.equal(await page.locator('input[value="Pix"],input[value="Cartao"]').count(), 0); assert(await page.locator('[name="amount"]').isDisabled());
+  assert.match(await page.locator('.ie-physical-terms').textContent(), /Procure a secretaria/);
   // Unknown dates keep registrations closed while the CPF consultation remains available.
   account = null; quote = { ...event, active_lot: null, open: false, event_date: '', notice: 'Prévia: defina a data do evento.' };
   await page.goto(base); await page.locator('.ie-notice').waitFor(); assert.equal(await page.locator('[data-form="register"]').count(), 0);
   await page.locator('.ie-tabs [data-tab="lookup"]').click(); assert.equal(await page.locator('[data-form="lookup"]').count(), 1);
   assert.deepEqual(errors, []);
   await browser.close(); server.close();
-  console.log('OK: desktop/mobile, restored card selection, production redirect + direct checkout link, PIX return hint, preserved account on failure, reduced card balance, settlement and no duplicate checkout.');
+  console.log('OK: desktop/mobile, online card + PIX return, physical card registration/instructions/manual settlement, disabled checkout, balance and no duplicate checkout.');
 })().catch(error => { console.error(error); process.exit(1); });

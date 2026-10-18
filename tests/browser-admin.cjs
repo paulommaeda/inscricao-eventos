@@ -62,6 +62,30 @@ const assert = require('node:assert/strict');
     await page.locator('.ie-manual-entry summary').click(); const reverseForm = page.locator('.ie-manual-entry form');
     await reverseForm.locator('[name="note"]').fill('Correção de lançamento'); await reverseForm.locator('[name="confirmed"]').check(); await reverseForm.getByRole('button', { name: 'Reverter baixa manual' }).click(); await page.waitForLoadState('networkidle');
     data = await state(); assert(data.rows.wp_ie_manuals[1].reversed_at); assert.equal(data.rows.wp_ie_transactions[1].credit, 0);
+    // Save the actual event switches and settle a physical card through the administrator form.
+    const beforePOS = data.calls.length;
+    await page.goto(base + '/admin.php?page=ie-events&edit=1');
+    await page.locator('[name="allow_card"]').uncheck(); await page.locator('[name="allow_card_physical"]').check();
+    assert(await page.locator('[name="allow_pix"]').isChecked());
+    await page.locator('[name="physical_card_message"]').fill('Procure a secretaria para finalizar a sua inscrição e validar seu pagamento.');
+    await page.getByRole('button', { name: 'Salvar evento', exact: true }).click(); await page.waitForLoadState('networkidle');
+    data = await state(); assert.equal(data.rows.wp_ie_events[1].allow_card, 0); assert.equal(data.rows.wp_ie_events[1].allow_card_physical, 1); assert.equal(data.rows.wp_ie_events[1].allow_pix, 1);
+    assert(await page.locator('[name="allow_card_physical"]').isChecked()); assert(!await page.locator('[name="allow_card"]').isChecked());
+    if (process.env.IE_TEST_ARTIFACTS) await page.screenshot({ path: path.join(process.env.IE_TEST_ARTIFACTS, 'physical-settings-mobile.png'), fullPage: true });
+    await page.goto(base + '/admin.php?edit_registration=1'); await page.locator('[name="method"]').selectOption('CartaoPOS');
+    await page.getByRole('button', { name: 'Salvar inscrição' }).click(); await page.waitForURL('**view=1');
+    assert.equal((await state()).rows.wp_ie_registrations[1].method, 'CartaoPOS');
+    await page.locator('.ie-manual-panel').filter({ has: page.locator('input[name="payment_id"][value="0"]') }).locator('summary').click();
+    assert.equal(await manualForm.locator('[name="method"]').inputValue(), 'CartaoPOS');
+    await manualForm.locator('[name="amount"]').fill('490'); await manualForm.locator('[name="note"]').fill('Maquininha: NSU TESTE conferido'); await manualForm.locator('[name="confirmed"]').check();
+    await manualForm.getByRole('button', { name: 'Registrar baixa manual' }).click(); await page.waitForLoadState('networkidle');
+    data = await state(); assert.equal(data.rows.wp_ie_manuals[2].method, 'CartaoPOS'); assert.equal(data.rows.wp_ie_manuals[2].payment_id, 0); assert.equal(data.rows.wp_ie_manuals[2].amount, 49000); assert.equal(data.calls.length, beforePOS);
+    const posEntry = page.locator('.ie-manual-entry').filter({ hasText: 'Baixa #2' });
+    assert.match(await posEntry.textContent(), /Cartão físico \(maquininha\)/);
+    if (process.env.IE_TEST_ARTIFACTS) await page.screenshot({ path: path.join(process.env.IE_TEST_ARTIFACTS, 'physical-receipt-mobile.png'), fullPage: true });
+    await posEntry.locator('summary').click(); const posReverse = posEntry.locator('form');
+    await posReverse.locator('[name="note"]').fill('Correção do teste POS'); await posReverse.locator('[name="confirmed"]').check(); await posReverse.getByRole('button', { name: 'Reverter baixa manual' }).click(); await page.waitForLoadState('networkidle');
+    data = await state(); assert(data.rows.wp_ie_manuals[2].reversed_at); assert.equal(data.calls.length, beforePOS);
     if (process.env.IE_TEST_ARTIFACTS) { fs.mkdirSync(process.env.IE_TEST_ARTIFACTS, { recursive: true }); await page.screenshot({ path: path.join(process.env.IE_TEST_ARTIFACTS, 'admin-mobile.png'), fullPage: true }); }
     const callsBeforePurge = data.calls.length;
     await page.locator('.ie-danger summary').click();
@@ -79,6 +103,6 @@ const assert = require('node:assert/strict');
     await removeEvent.locator('[name="confirmation"]').fill('EXCLUIR EVENTO 1'); await removeEvent.getByRole('button', { name: 'Excluir evento permanentemente' }).click(); await page.waitForLoadState('networkidle');
     data = await state(); assert.equal(Object.keys(data.rows.wp_ie_events).length, 0); assert.equal(Object.keys(data.rows.wp_ie_lots).length, 0); assert.equal(data.calls.length, callsBeforePurge);
     assert.deepEqual(errors, []); assert(!/Warning:|Fatal error:|Deprecated:/.test(logs), logs);
-    console.log('OK: PHP admin edits, manual receipt/reversal, manager read-only view/export, forged writes denied, deletion, PIX refund, nonce and mobile layout.');
+    console.log('OK: PHP event payment switches, physical card manual receipt/reversal, manager read-only view/export, forged writes denied, deletion, PIX refund, nonce and mobile layout.');
   } finally { if (browser) await browser.close(); server.kill(); fs.rmSync(directory, { recursive: true, force: true }); }
 })().catch(error => { console.error(error); process.exit(1); });

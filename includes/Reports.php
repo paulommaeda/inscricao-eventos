@@ -9,7 +9,7 @@ final class Reports
     {
         $text = static fn($key, $default = '') => is_scalar($input[$key] ?? $default) ? (string) ($input[$key] ?? $default) : $default;
         $choice = static function ($key, array $allowed, $default = '') use ($text) { $v = $text($key, $default); return in_array($v, $allowed, true) ? $v : $default; };
-        $f = ['event' => absint($text('event', '0')), 'status' => $choice('status', ['', 'pending', 'partial', 'paid', 'overpaid']), 'q' => Domain::cut(sanitize_text_field($text('q')), 200), 'method' => $choice('method', ['', 'Pix', 'Cartao']), 'all_scopes' => $text('all_scopes') === '1' ? 1 : 0, 'registration_status' => $choice('registration_status', ['active', 'cancelled', 'deleted', 'all'], 'active'), 'lot' => Domain::cut(sanitize_text_field($text('lot')), 100), 'start' => Domain::date($text('start'), true), 'end' => Domain::date($text('end'), true)];
+        $f = ['event' => absint($text('event', '0')), 'status' => $choice('status', ['', 'pending', 'partial', 'paid', 'overpaid']), 'q' => Domain::cut(sanitize_text_field($text('q')), 200), 'method' => $choice('method', ['', 'Pix', 'Cartao', Domain::PHYSICAL_CARD]), 'all_scopes' => $text('all_scopes') === '1' ? 1 : 0, 'registration_status' => $choice('registration_status', ['active', 'cancelled', 'deleted', 'all'], 'active'), 'lot' => Domain::cut(sanitize_text_field($text('lot')), 100), 'start' => Domain::date($text('start'), true), 'end' => Domain::date($text('end'), true)];
         if ($f['start'] && $f['end'] && $f['start'] > $f['end']) { throw new \RuntimeException('A data inicial do filtro deve ser anterior ou igual à data final.'); }
         return $f;
     }
@@ -19,8 +19,7 @@ final class Reports
         $where = ['1=1']; $args = [];
         if (in_array($f['registration_status'], ['active', 'cancelled', 'deleted'], true)) { $where[] = 'r.status=%s'; $args[] = $f['registration_status']; }
         if (!$f['all_scopes']) {
-            try { $scope = (new Gateway())->scope(); } catch (\Throwable $error) { $scope = ''; }
-            $where[] = 'r.scope=%s'; $args[] = $scope;
+            $where[] = '(r.scope=%s OR r.scope=%s)'; array_push($args, Gateway::formScope(), Gateway::offlineScope());
         }
         if ($f['event']) { $where[] = 'r.event_id=%d'; $args[] = $f['event']; }
         if ($f['method']) { $where[] = 'r.method=%s'; $args[] = $f['method']; }

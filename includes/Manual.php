@@ -5,7 +5,7 @@ if (!defined('ABSPATH')) { exit; }
 /** Explicit administrator receipts, independent of the gateway transaction ledger. */
 final class Manual
 {
-    public const METHODS = ['Pix' => 'PIX', 'Cartao' => 'Cartão', 'Dinheiro' => 'Dinheiro', 'Transferencia' => 'Transferência', 'Outro' => 'Outro'];
+    public const METHODS = ['Pix' => 'PIX', 'Cartao' => 'Cartão', Domain::PHYSICAL_CARD => 'Cartão físico (maquininha)', 'Dinheiro' => 'Dinheiro', 'Transferencia' => 'Transferência', 'Outro' => 'Outro'];
     public static function active(array $row): bool { return empty($row['reversed_at']) && empty($row['resolved_at']); }
     public static function settled(array $payment): bool
     {

@@ -4,6 +4,18 @@ if (!defined('ABSPATH')) { exit; }
 
 final class Domain
 {
+    public const PHYSICAL_CARD = 'CartaoPOS';
+    public const PHYSICAL_MESSAGE = 'Procure a secretaria para finalizar a sua inscrição e validar seu pagamento.';
+    public static function methodLabel(string $method): string { return ['Pix' => 'PIX', 'Cartao' => 'Cartão', self::PHYSICAL_CARD => 'Cartão físico (maquininha)'][$method] ?? $method; }
+    public static function physicalMessage(array $event): string { return trim((string) ($event['physical_card_message'] ?? '')) ?: self::PHYSICAL_MESSAGE; }
+    public static function methods(array $event, ?array $registration = null): array
+    {
+        $methods = [];
+        if (!empty($event['allow_pix']) && (!$registration || in_array($registration['method'], ['Pix', self::PHYSICAL_CARD], true))) { $methods[] = 'Pix'; }
+        if (!empty($event['allow_card'])) { $methods[] = 'Cartao'; }
+        if (!empty($event['allow_card_physical'])) { $methods[] = self::PHYSICAL_CARD; }
+        return $methods;
+    }
     public static function cents($value): int
     {
         if (!is_string($value) && !is_int($value) && !is_float($value)) { throw new \RuntimeException('Informe um valor monetário válido.'); }

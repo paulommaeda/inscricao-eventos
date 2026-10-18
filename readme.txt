@@ -2,11 +2,11 @@
 Contributors: paulommaeda
 Requires at least: 6.4
 Requires PHP: 8.1
-Stable tag: 1.4.2
+Stable tag: 1.5.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Eventos com identidade visual própria, lotes e inscrições com cartão ou pagamentos parciais por PIX no checkout K8.
+Eventos com identidade visual própria, lotes, PIX/cartão online no K8 e cartão físico na maquininha com baixa manual.
 
 == Installation ==
 Instale o ZIP, ative, configure as credenciais K8 Pay e os dados do evento no menu Inscrições.
@@ -14,6 +14,14 @@ Use [inscricao_eventos evento="1"] em uma página. A ativação cria o modelo do
 Use [inscricao_eventos_dashboard evento="1"] para o dashboard privado da organização.
 
 == Changelog ==
+= 1.5.0 =
+* Opções independentes por evento para PIX, cartão online e cartão físico na maquininha.
+* Cartão físico conclui o cadastro e mostra orientação editável para procurar a secretaria, mantendo o saldo pendente até a baixa manual por administrador.
+* Recebimentos da maquininha identificados nos detalhes, filtros, histórico, financeiro e CSV, com crédito manual separado do K8.
+* Cartão online desabilitado não emite nem reexibe checkout; tentativas anteriores conservam a conferência e conciliação bancária.
+* Eventos somente com cartão físico funcionam sem credenciais K8; consultas e baixas são preservadas se pagamentos online forem habilitados depois.
+* Testes de cadastro presencial, bloqueio online, baixas e reversões, permissões de gerentes, saldo, financeiro e interface móvel.
+
 = 1.4.2 =
 * Validação do meio de pagamento refeita antes do envio: cartão não depende do campo de entrada PIX, inclusive com seleção restaurada pelo navegador/autopreenchimento.
 * Botão Abrir checkout K8 disponível após a criação, com redirecionamento automático e sem nova cobrança.

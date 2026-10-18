@@ -38,7 +38,7 @@ try {
             $GLOBALS['http_queue'][] = ['code' => 200, 'body' => json_encode($data)];
             if ($action === 'ie_cancel_payment') { $GLOBALS['http_queue'][] = ['code' => 200, 'body' => '{"Retorno":"OK","Posterior":false}']; $data['Estado'] = 'Estornado'; $GLOBALS['http_queue'][] = ['code' => 200, 'body' => json_encode($data)]; }
         }
-        $handlers = ['ie_save_registration' => 'saveRegistration', 'ie_registration_action' => 'registrationAction', 'ie_cancel_payment' => 'cancelPayment', 'ie_sync_payment' => 'syncPayment', 'ie_review_cancellation' => 'reviewCancellation', 'ie_delete_event' => 'deleteEvent', 'ie_manual_payment' => 'manualPayment', 'ie_link_manual_k8' => 'linkManualK8', 'ie_reverse_manual' => 'reverseManual', 'ie_export' => 'export'];
+        $handlers = ['ie_save_event' => 'saveEvent', 'ie_save_registration' => 'saveRegistration', 'ie_registration_action' => 'registrationAction', 'ie_cancel_payment' => 'cancelPayment', 'ie_sync_payment' => 'syncPayment', 'ie_review_cancellation' => 'reviewCancellation', 'ie_delete_event' => 'deleteEvent', 'ie_manual_payment' => 'manualPayment', 'ie_link_manual_k8' => 'linkManualK8', 'ie_reverse_manual' => 'reverseManual', 'ie_export' => 'export'];
         if (!isset($handlers[$action])) throw new RuntimeException('Unsupported fixture action');
         A::{$handlers[$action]}(); return;
     }

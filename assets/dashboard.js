@@ -6,7 +6,7 @@
   const number = new Intl.NumberFormat('pt-BR');
   const money = value => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value || 0) / 100);
   const day = value => value ? value.split('-').reverse().join('/') : 'A definir';
-  const labels = { Dinheiro: 'Dinheiro', Transferencia: 'Transferência', Outro: 'Outro', pending: 'Sem pagamento', partial: 'Parcial', paid: 'Quitada', active: 'Ativa', cancelled: 'Cancelada', deleted: 'Lixeira', Pix: 'PIX', Cartao: 'Cartão' };
+  const labels = { Dinheiro: 'Dinheiro', Transferencia: 'Transferência', Outro: 'Outro', pending: 'Sem pagamento', partial: 'Parcial', paid: 'Quitada', active: 'Ativa', cancelled: 'Cancelada', deleted: 'Lixeira', Pix: 'PIX', Cartao: 'Cartão', CartaoPOS: 'Cartão físico (maquininha)' };
   const options = (items, selected) => items.map(([v, text]) => `<option value="${esc(v)}" ${String(v) === String(selected) ? 'selected' : ''}>${esc(text)}</option>`).join('');
   const countdown = days => days === null ? 'A definir' : days < 0 ? `Há ${Math.abs(days)} dias` : days === 0 ? 'Hoje' : `${days} dias`;
   const metric = (label, value, note, cls = '') => `<article class="ied-metric ${cls}"><span>${esc(label)}</span><strong>${esc(value)}</strong><small>${esc(note)}</small></article>`;
@@ -54,7 +54,7 @@
             ${filterField('Evento', `<select name="event" ${fixedEvent ? 'disabled' : ''}>${options(eventItems, f.event)}</select>`)}
             ${filterField('Lote', `<select name="lot">${options(lotItems, f.lot)}</select>`)}
             ${filterField('Pagamento', `<select name="status">${options([['', 'Todos os saldos'], ['pending', 'Sem pagamento'], ['partial', 'Pagamento parcial'], ['paid', 'Quitadas'], ['overpaid', 'Pagamento excedente']], f.status)}</select>`)}
-            ${filterField('Forma do cadastro', `<select name="method">${options([['', 'PIX e cartão'], ['Pix', 'PIX'], ['Cartao', 'Cartão']], f.method)}</select>`)}
+            ${filterField('Forma do cadastro', `<select name="method">${options([['', 'Todas as formas'], ['Pix', 'PIX'], ['Cartao', 'Cartão online'], ['CartaoPOS', 'Cartão físico']], f.method)}</select>`)}
             ${filterField('Situação da inscrição', `<select name="registration_status">${options([['active', 'Ativas'], ['cancelled', 'Canceladas'], ['deleted', 'Lixeira'], ['all', 'Todas']], f.registration_status)}</select>`)}
             ${filterField('Nome, e-mail ou CPF completo', `<input type="search" name="q" maxlength="200" value="${esc(f.q)}" placeholder="Buscar participante">`, 'ied-search')}
             ${filterField('Cadastro de', `<input type="date" name="start" value="${esc(f.start)}">`)}
