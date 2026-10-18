@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 (async () => {
   const probe = net.createServer(); await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve)); const port = probe.address().port; await new Promise(resolve => probe.close(resolve));
   const base = `http://127.0.0.1:${port}`; const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ie-dashboard-test-'));
-  const server = spawn(process.env.IE_TEST_PHP || 'php', ['-d', 'error_reporting=E_ALL', '-d', 'display_errors=0', '-d', 'opcache.jit=0', '-d', 'opcache.jit_buffer_size=0', '-S', `127.0.0.1:${port}`, path.join(__dirname, 'dashboard-fixture.php')], { env: { ...process.env, IE_DASH_STATE: path.join(directory, 'state.json') }, stdio: ['ignore', 'ignore', 'pipe'] });
+  const server = spawn(process.env.IE_TEST_PHP || 'php', ['-d', 'error_reporting=E_ALL', '-d', 'log_errors=1', '-d', 'display_errors=0', '-d', 'opcache.jit=0', '-d', 'opcache.jit_buffer_size=0', '-S', `127.0.0.1:${port}`, path.join(__dirname, 'dashboard-fixture.php')], { env: { ...process.env, IE_DASH_STATE: path.join(directory, 'state.json') }, stdio: ['ignore', 'ignore', 'pipe'] });
   let logs = '', browser; server.stderr.on('data', value => { logs += value; });
   try {
     for (let i = 0; i < 50; i++) { try { await fetch(base); break; } catch { await new Promise(resolve => setTimeout(resolve, 100)); } }

@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ie-k8-manual-'));
   const probe = net.createServer(); await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve)); const port = probe.address().port; await new Promise(resolve => probe.close(resolve));
   const base = `http://127.0.0.1:${port}`;
-  const server = spawn(process.env.IE_TEST_PHP || 'php', ['-d', 'error_reporting=E_ALL', '-d', 'display_errors=0', '-d', 'opcache.jit=0', '-d', 'opcache.jit_buffer_size=0', '-S', `127.0.0.1:${port}`, path.join(__dirname, 'admin-fixture.php')], { env: { ...process.env, IE_ADMIN_STATE: path.join(directory, 'state.json'), IE_ADMIN_K8_MANUAL: '1' }, stdio: ['ignore', 'ignore', 'pipe'] });
+  const server = spawn(process.env.IE_TEST_PHP || 'php', ['-d', 'error_reporting=E_ALL', '-d', 'log_errors=1', '-d', 'display_errors=0', '-d', 'opcache.jit=0', '-d', 'opcache.jit_buffer_size=0', '-S', `127.0.0.1:${port}`, path.join(__dirname, 'admin-fixture.php')], { env: { ...process.env, IE_ADMIN_STATE: path.join(directory, 'state.json'), IE_ADMIN_K8_MANUAL: '1' }, stdio: ['ignore', 'ignore', 'pipe'] });
   let logs = ''; server.stderr.on('data', data => { logs += data; }); let browser;
   try {
     for (let i = 0; i < 50; i++) { try { await fetch(base); break; } catch { await new Promise(resolve => setTimeout(resolve, 100)); } }

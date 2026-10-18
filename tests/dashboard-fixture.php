@@ -16,8 +16,8 @@ update_option('ie_settings', ['environment' => 'sandbox', 'credentials' => C::se
 $scope = (new G())->scope(); $today = new DateTimeImmutable('now', new DateTimeZone('America/Sao_Paulo'));
 $event = array_merge(S::sample(), ['name' => 'Fogo Santo - Origens', 'brand_preset' => 'custom', 'primary_color' => '#215c4a', 'accent_color' => '#d2a45c', 'background_color' => '#f6f5f0', 'hero_url' => 'https://event.test/uploads/origens.jpeg', 'location' => 'Recanto das Oliveiras', 'status' => 'published', 'event_date' => $today->modify('+120 days')->format('Y-m-d'), 'payment_deadline' => $today->modify('+115 days')->format('Y-m-d'), 'registration_start' => $today->modify('-15 days')->format('Y-m-d'), 'registration_end' => $today->modify('+30 days')->format('Y-m-d')]);
 $eid = S::insert('events', $event);
-S::insert('lots', ['event_id' => $eid, 'name' => 'Lote 1', 'price' => 49000, 'max_installments' => 10, 'starts_on' => $event['registration_start'], 'ends_on' => $today->modify('+10 days')->format('Y-m-d')]);
-S::insert('lots', ['event_id' => $eid, 'name' => 'Lote 2', 'price' => 52000, 'max_installments' => 8, 'starts_on' => $today->modify('+11 days')->format('Y-m-d'), 'ends_on' => $event['registration_end']]);
+S::insert('lots', ['event_id' => $eid, 'name' => 'Lote 1', 'price' => 49000, 'max_installments' => 10, 'starts_on' => $event['registration_start'], 'ends_on' => $today->modify('+10 days')->format('Y-m-d'), 'note' => '']);
+S::insert('lots', ['event_id' => $eid, 'name' => 'Lote 2', 'price' => 52000, 'max_installments' => 8, 'starts_on' => $today->modify('+11 days')->format('Y-m-d'), 'ends_on' => $event['registration_end'], 'note' => '']);
 $eid2 = S::insert('events', array_merge($event, ['name' => 'Segundo encontro']));
 for ($i = 0; $i < 34; $i++) {
     $method = $i % 3 === 0 ? 'Cartao' : 'Pix'; $credit = $i % 4 === 1 ? 10000 : ($i % 4 === 2 ? 0 : 49000);
